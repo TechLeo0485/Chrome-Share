@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>TabShare — Sharing</title>
+  <style>
+    body {
+      font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 0 20px;
+      color: #1a1a1a;
+    }
+    h1 { font-size: 20px; }
+    h2 { font-size: 15px; margin-top: 28px; }
+    #status {
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #f1f3f4;
+      margin: 16px 0;
+      font-size: 14px;
+    }
+    #status.error { background: #fce8e6; color: #a50e0e; }
+    #status.connected { background: #e6f4ea; color: #137333; }
+    #codeBox {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 14px 16px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      font-family: monospace;
+      font-size: 20px;
+      letter-spacing: 0.5px;
+      text-align: center;
+      background: #f8f9fa;
+    }
+    .row { display: flex; gap: 8px; margin-top: 8px; }
+    button {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .primary { background: #1a73e8; color: white; }
+    #stopBtn { background: #ea4335; color: white; margin-top: 24px; }
+    .hint { font-size: 12px; color: #666; }
+    #step1 { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Sharing</h1>
+  <div id="status">Starting…</div>
+  <div id="nowSharing" class="hint" style="margin-bottom:4px"></div>
+  <div id="switchHint" class="hint" style="display:none; margin-bottom:12px">To share a different tab, switch to it and click the toolbar icon — it'll show a "Continue sharing with this tab" button.</div>
+
+  <div id="step1">
+    <h2>Send this code to your friend</h2>
+    <div id="codeBox" readonly>—</div>
+    <div class="row">
+      <button id="copyCodeBtn" class="primary">Copy code</button>
+    </div>
+    <p class="hint">They paste it into their extension's "Join a friend's share" screen and click Join — it connects automatically, no reply needed.</p>
+  </div>
+
+  <button id="stopBtn">Stop sharing</button>
+
+  <script src="host-panel.js"></script>
+</body>
+</html>

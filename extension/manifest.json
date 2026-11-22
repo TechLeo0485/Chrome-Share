@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "TabShare Remote Control",
+  "version": "0.9.0",
+  "description": "Share one Chrome tab (screen + mouse/keyboard control) with a trusted friend, peer-to-peer over WebRTC. No account setup — send one short code and it connects automatically.",
+
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA31pFb/NMNAwdkNph+8j+zhvwVa/nKaEJjt9oLhl6N2PVX94eTGZPA9YW/ysIbjB0+QhgQI1vjwfSYXImcVxbPc6dyYGAP4qPtcqBh17mSMviax5W15dVJCy7WlOiNwLc0IyaQpopBqOULtNHOXGVICP9LwkEtvNBlsbo9XqenCWBIIpLbbpUKN48UT5PSQR9/mz355Bxs0Zl+Tux+YPrMyN0p9eLfN/Qok5v2XCevGz+VKd/IndG2IzpcIwArBLCbQroOxv8TrmJYiBJVf+5V6q12KsgoBHJsgy1ghtBJb4CJ2ewrv/3q/P0hE0yj5BP0tGA9jtrNhvByhrQ/ol2xwIDAQAB",
+
+  "permissions": [
+    "tabCapture",
+    "activeTab",
+    "debugger",
+    "offscreen",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://0.peerjs.com/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_popup": "host.html",
+    "default_title": "TabShare Remote Control",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "minimum_chrome_version": "116"
+}

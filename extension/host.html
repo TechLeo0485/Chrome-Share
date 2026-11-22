@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>TabShare</title>
+  <style>
+    body {
+      width: 300px;
+      font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+      padding: 14px;
+      margin: 0;
+      color: #1a1a1a;
+    }
+    h1 {
+      font-size: 15px;
+      margin: 0 0 10px;
+    }
+    select, button {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px;
+      font-size: 13px;
+      margin-bottom: 8px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+    }
+    button {
+      cursor: pointer;
+      font-weight: 600;
+      border: none;
+    }
+    #shareBtn { background: #1a73e8; color: white; }
+    #joinBtn { background: #f1f3f4; color: #1a1a1a; }
+    .hint { font-size: 11px; color: #666; margin: -2px 0 10px; }
+    hr { border: none; border-top: 1px solid #eee; margin: 12px 0; }
+    .modeRow { display: flex; gap: 6px; margin-bottom: 8px; }
+    .modeRow label {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      padding: 6px 8px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .modeRow input { margin: 0; }
+    #continueBtn { background: #137333; color: white; }
+
+    #statusLine { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 10px; }
+    #statusDot { width: 8px; height: 8px; border-radius: 50%; background: #f9ab00; flex: none; }
+    #statusLine.connected #statusDot { background: #1e8e3e; }
+    #popupCodeBox {
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      font-family: monospace;
+      font-size: 15px;
+      letter-spacing: 0.3px;
+      text-align: center;
+      background: #f8f9fa;
+      margin-bottom: 8px;
+    }
+    #popupCopyBtn { background: #f1f3f4; color: #1a1a1a; }
+    #stopBtn { background: #ea4335; color: white; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div id="statusArea" style="display:none">
+    <h1>Currently sharing</h1>
+    <div id="sharingTabLabel" class="hint" style="margin-bottom:6px; font-size:13px; color:#333;"></div>
+    <div id="statusLine"><span id="statusDot"></span><span id="statusText">Starting…</span></div>
+
+    <div id="popupCodeArea" style="display:none">
+      <div id="popupCodeBox">—</div>
+      <button id="popupCopyBtn">Copy code</button>
+    </div>
+
+    <div id="continueArea" style="display:none; margin-top:10px">
+      <div id="continueLabel" class="hint" style="margin-bottom:8px; font-size:13px; color:#333;"></div>
+      <button id="continueBtn">Continue sharing with this tab</button>
+    </div>
+
+    <button id="stopBtn">Stop sharing</button>
+    <hr />
+  </div>
+
+  <div id="shareArea">
+    <h1>Share</h1>
+    <div class="modeRow">
+      <label><input type="radio" name="mode" value="tab" checked /> One tab</label>
+      <label><input type="radio" name="mode" value="window" /> Whole window</label>
+    </div>
+    <div id="activeTabLabel" class="hint" style="margin-bottom:8px; font-size:13px; color:#333;">Loading…</div>
+    <button id="shareBtn">Start sharing</button>
+    <div id="modeHint" class="hint">Chrome only allows capturing the tab that's active right now — switch to the tab you want to share (e.g. Gmail) before clicking the toolbar icon. You'll get a code to send your friend. A visible "being debugged" bar appears on the shared tab while active — that's Chrome, not this extension misbehaving.</div>
+  </div>
+
+  <hr />
+
+  <h1>Join a friend's share</h1>
+  <button id="joinBtn">Open viewer</button>
+  <div class="hint">Opens in a new tab. You can paste the code your friend sent you there.</div>
+
+  <script src="host.js"></script>
+</body>
+</html>
