@@ -18,6 +18,11 @@
     "https://0.peerjs.com/*"
   ],
 
+  "options_ui": {
+    "page": "settings.html",
+    "open_in_tab": true
+  },
+
   "background": {
     "service_worker": "background.js"
   },

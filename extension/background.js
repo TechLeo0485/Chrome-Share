@@ -286,11 +286,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await attachDebugger(initialTabId);
           sharingTabId = initialTabId;
           await chrome.storage.session.set({ sharingTabId: initialTabId });
+          // The offscreen document has no chrome.storage access, so hand it
+          // the user's own TURN server (from Connection settings) here.
+          const stored = await chrome.storage.local.get("customTurnServer").catch(() => ({}));
           chrome.runtime.sendMessage({
             target: "offscreen",
             type: "begin-host-session",
             tabId: initialTabId,
-            streamId
+            streamId,
+            customTurn: (stored && stored.customTurnServer) || null
           }).catch(() => {});
           sendResponse({ ok: true });
           break;

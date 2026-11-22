@@ -20,9 +20,35 @@ let viewportWatcherTimer = null;
 // resize re-capture) — guards against the two racing each other.
 let captureBusy = false;
 
+// ---- Connection resilience state ----
+// The session code is our PeerJS ID; we keep it for the whole session so the
+// friend's code never goes stale, even if we have to re-register it with the
+// broker after a network blip.
+let sessionActive = false;
+let hostPeerId = null;
+let iceServers = null;
+let brokerRetryTimer = null;
+let brokerRetryDelay = 1000;
+const BROKER_RETRY_MAX_MS = 30000;
+// PeerJS error types that mean "the broker link hiccuped", not "give up".
+const RECOVERABLE_PEER_ERRORS = new Set([
+  "network",
+  "server-error",
+  "socket-error",
+  "socket-closed",
+  "unavailable-id",
+  "disconnected"
+]);
+// The viewer pings every couple of seconds; if that stops for this long the
+// friend's link is dead (closed laptop, lost signal) even if WebRTC hasn't
+// noticed yet.
+const FRIEND_TIMEOUT_MS = 15000;
+let lastFriendPingAt = 0;
+let friendWatchdogTimer = null;
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || msg.target !== "offscreen") return;
-  if (msg.type === "begin-host-session") beginHostSession(msg.tabId, msg.streamId);
+  if (msg.type === "begin-host-session") beginHostSession(msg.tabId, msg.streamId, msg.customTurn);
   if (msg.type === "switch-tab") switchCapturedTab(msg.tabId, msg.streamId);
   if (msg.type === "check-viewport-now") checkViewportOnce();
   if (msg.type === "end-host-session") endHostSession();
@@ -61,6 +87,12 @@ async function captureTab(tabId, streamId) {
       }
     }
   });
+
+  // Tell the encoder this is screen-like content: under bandwidth pressure it
+  // then drops frame rate rather than resolution, so text stays readable on
+  // slow links instead of turning into blur.
+  const videoTrack = stream.getVideoTracks()[0];
+  if (videoTrack && "contentHint" in videoTrack) videoTrack.contentHint = "detail";
 
   if (currentAudioCtx) {
     try {
@@ -103,7 +135,7 @@ async function swapLiveTrack(newStream) {
   }
 }
 
-async function beginHostSession(tabId, streamId) {
+async function beginHostSession(tabId, streamId, customTurn) {
   currentTabId = tabId;
 
   let captured;
@@ -116,33 +148,129 @@ async function beginHostSession(tabId, streamId) {
   localStream = captured.stream;
   currentViewport = captured.viewport;
 
-  const hostId = randomPeerId();
-  peer = new Peer(hostId, { config: { iceServers: self.TABSHARE_RTC_CONFIG.iceServers } });
+  sessionActive = true;
+  hostPeerId = randomPeerId();
+  iceServers = self.TABSHARE_buildIceServers(customTurn);
+  brokerRetryDelay = 1000;
+  startPeer();
+  startViewportWatcher();
+}
 
-  peer.on("error", (err) => {
-    notifyHost({ type: "session-error", error: "Connection service error: " + (err && err.type ? err.type : err) });
-  });
+// Registers our session code with the PeerJS broker. Called once at start,
+// and again (same code) if the broker connection is lost badly enough that
+// PeerJS destroyed the Peer object.
+function startPeer() {
+  const p = new Peer(hostPeerId, { config: { iceServers } });
+  peer = p;
 
-  peer.on("open", (id) => {
+  p.on("open", (id) => {
+    if (p !== peer) return;
+    brokerRetryDelay = 1000;
     notifyHost({ type: "session-code-ready", code: id });
   });
 
-  // The friend's viewer connects to us first (data channel for input) using
-  // the code we showed them. Once that's open we know their peer ID, so we
-  // call *them* with our captured stream — no separate step needed.
-  peer.on("connection", (conn) => {
-    dataConn = conn;
-    wireDataConnection();
-    conn.on("open", () => {
-      notifyHost({ type: "datachannel-open" });
-      mediaConn = peer.call(conn.peer, localStream);
-      mediaConn.on("error", (err) => {
-        notifyHost({ type: "session-error", error: "Video call error: " + err.message });
-      });
-    });
+  // Lost the broker's websocket. Any live friend session keeps working
+  // (video/input are peer-to-peer and don't touch the broker) — we only need
+  // the broker back so a friend can (re)join.
+  p.on("disconnected", () => {
+    if (p !== peer) return;
+    scheduleBrokerReconnect();
   });
 
-  startViewportWatcher();
+  p.on("error", (err) => {
+    if (p !== peer) return;
+    const type = err && err.type;
+    if (RECOVERABLE_PEER_ERRORS.has(type)) {
+      scheduleBrokerReconnect();
+      return;
+    }
+    notifyHost({ type: "session-error", error: "Connection service error: " + (type || err) });
+  });
+
+  p.on("connection", handleIncomingConnection);
+}
+
+function scheduleBrokerReconnect() {
+  if (!sessionActive || brokerRetryTimer) return;
+  notifyHost({ type: "broker-reconnecting" });
+  const delay = brokerRetryDelay;
+  brokerRetryDelay = Math.min(brokerRetryDelay * 2, BROKER_RETRY_MAX_MS);
+  brokerRetryTimer = setTimeout(() => {
+    brokerRetryTimer = null;
+    if (!sessionActive || !peer) return;
+    if (peer.destroyed) {
+      // PeerJS gave up on this object entirely; register the same code fresh.
+      startPeer();
+    } else if (peer.disconnected) {
+      try {
+        peer.reconnect();
+      } catch (_e) {
+        scheduleBrokerReconnect();
+      }
+    }
+  }, delay);
+}
+
+// The friend's viewer connects to us first (data channel for input) using
+// the code we showed them. Once that's open we know their peer ID, so we
+// call *them* with our captured stream — no separate step needed.
+//
+// If a connection is already active, this is almost always the same friend
+// rejoining after their network dropped (the viewer reconnects on its own),
+// so the newest connection replaces the stale one.
+function handleIncomingConnection(conn) {
+  closeFriendConnections();
+  dataConn = conn;
+  wireDataConnection(conn);
+  conn.on("open", () => {
+    if (conn !== dataConn || !peer) return;
+    lastFriendPingAt = Date.now();
+    startFriendWatchdog();
+    notifyHost({ type: "datachannel-open" });
+    if (currentViewport) {
+      conn.send({ type: "viewport-update", width: currentViewport.width, height: currentViewport.height });
+    }
+    const call = peer.call(conn.peer, localStream);
+    mediaConn = call;
+    call.on("error", (err) => {
+      if (call !== mediaConn) return;
+      notifyHost({ type: "session-error", error: "Video call error: " + err.message });
+    });
+  });
+}
+
+function closeFriendConnections() {
+  stopFriendWatchdog();
+  const oldData = dataConn;
+  const oldMedia = mediaConn;
+  dataConn = null;
+  mediaConn = null;
+  if (oldData) {
+    try {
+      oldData.close();
+    } catch (_e) {}
+  }
+  if (oldMedia) {
+    try {
+      oldMedia.close();
+    } catch (_e) {}
+  }
+}
+
+function startFriendWatchdog() {
+  stopFriendWatchdog();
+  friendWatchdogTimer = setInterval(() => {
+    if (!dataConn) return;
+    if (Date.now() - lastFriendPingAt > FRIEND_TIMEOUT_MS) {
+      closeFriendConnections();
+      notifyHost({ type: "datachannel-closed" });
+    }
+  }, 3000);
+}
+
+function stopFriendWatchdog() {
+  if (friendWatchdogTimer) clearInterval(friendWatchdogTimer);
+  friendWatchdogTimer = null;
 }
 
 // Called when background.js detects the host switched to a different tab in
@@ -178,10 +306,26 @@ async function switchCapturedTab(newTabId, newStreamId) {
   }
 }
 
-function wireDataConnection() {
-  dataConn.on("data", (msg) => handleInputMessage(msg));
-  dataConn.on("close", () => notifyHost({ type: "datachannel-closed" }));
-  dataConn.on("error", (err) => {
+function wireDataConnection(conn) {
+  conn.on("data", (msg) => {
+    if (conn !== dataConn) return;
+    if (msg && msg.type === "ping") {
+      lastFriendPingAt = Date.now();
+      try {
+        conn.send({ type: "pong", t: msg.t });
+      } catch (_e) {}
+      return;
+    }
+    handleInputMessage(msg);
+  });
+  conn.on("close", () => {
+    // Ignore closes of connections we already replaced or closed ourselves.
+    if (conn !== dataConn) return;
+    closeFriendConnections();
+    notifyHost({ type: "datachannel-closed" });
+  });
+  conn.on("error", (err) => {
+    if (conn !== dataConn) return;
     notifyHost({ type: "session-error", error: "Data connection error: " + err.message });
   });
 }
@@ -360,19 +504,11 @@ function handleInputMessage(msg) {
 }
 
 function endHostSession() {
+  sessionActive = false;
+  if (brokerRetryTimer) clearTimeout(brokerRetryTimer);
+  brokerRetryTimer = null;
   stopViewportWatcher();
-  if (dataConn) {
-    try {
-      dataConn.close();
-    } catch (_e) {}
-    dataConn = null;
-  }
-  if (mediaConn) {
-    try {
-      mediaConn.close();
-    } catch (_e) {}
-    mediaConn = null;
-  }
+  closeFriendConnections();
   if (peer) {
     try {
       peer.destroy();

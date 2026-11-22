@@ -42,14 +42,30 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   switch (msg.type) {
     case "session-code-ready":
+      // Also fires again (same code) after recovering from a broker drop.
       currentCode = msg.code;
       codeBox.textContent = msg.code;
       step1.style.display = "block";
-      setStatus("Send the code above to your friend. It'll connect automatically once they join.");
+      if (connected) {
+        setStatus("Connected — your friend is now in control.", "connected");
+      } else {
+        setStatus("Send the code above to your friend. It'll connect automatically once they join.");
+      }
+      break;
+    case "broker-reconnecting":
+      if (connected) {
+        setStatus("Connected — your friend is in control. (Code service briefly unreachable; retrying in the background — this session isn't affected.)", "connected");
+      } else {
+        setStatus("Can't reach the connection service right now — retrying automatically. Your code stays the same.", "error");
+      }
       break;
     case "datachannel-open":
       connected = true;
       setStatus("Connected — your friend is now in control.", "connected");
+      break;
+    case "datachannel-closed":
+      connected = false;
+      setStatus("Your friend's connection dropped. Their viewer reconnects automatically — or they can rejoin with the same code.");
       break;
     case "now-sharing-tab":
       if (nowSharingEl) {

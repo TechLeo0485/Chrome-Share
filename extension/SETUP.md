@@ -61,11 +61,14 @@ Stop and Start again, you'll get a fresh code — the old one stops working.
   clicked Stop, closed the tab, or the code is from an old session).
 - **Stuck on "Connecting…"** — likely a restrictive network on one side
   (corporate/school firewall) preventing the peer-to-peer connection or the
-  initial broker handshake. There's no dedicated TURN server here, only a
-  free public one as fallback for NAT traversal — trying from a home network
-  usually resolves it.
-- **Connects then immediately drops** — same cause as above; also check
-  neither of you closed the sharing/viewer tab.
+  initial broker handshake. The viewer retries automatically for a few
+  minutes. If it never connects, one of you can add a free-tier TURN server
+  in **Connection settings** (link in the popup and on the viewer's join
+  screen) — use its **Test** button to confirm it works. Trying from a home
+  network also usually helps.
+- **"Connection lost — reconnecting…"** — the link dropped; the viewer
+  rejoins the same code on its own. If it keeps happening, it's usually a
+  weak or restrictive network — a TURN server (above) helps.
 - **Video briefly freezes/blinks when switching tabs in window mode** —
   expected; each switch re-captures the newly active tab, which takes a
   fraction of a second.

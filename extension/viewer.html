@@ -55,6 +55,11 @@
       background: #303134;
       font-size: 13px;
     }
+    #sessionStatus.reconnecting { color: #fdd663; }
+    #sessionStatus.slow { color: #fcad70; }
+    #sessionStatus.error { color: #f28b82; }
+    .settingsLink { margin-top: 24px; font-size: 12px; color: #9aa0a6; }
+    .settingsLink a { color: #8ab4f8; }
     #leaveBtn {
       padding: 6px 14px;
       border-radius: 6px;
@@ -121,6 +126,10 @@
       <button id="joinBtn" class="primary">Join</button>
     </div>
     <div id="joinStatus"></div>
+    <div class="settingsLink">
+      Trouble connecting on a strict network?
+      <a href="settings.html" target="_blank">Connection settings</a>
+    </div>
   </div>
 
   <div id="sessionScreen">

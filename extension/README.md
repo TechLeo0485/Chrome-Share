@@ -65,7 +65,26 @@ Chrome.
 | `offscreen.html` / `offscreen.js` | hidden offscreen doc (host) | Tab capture, PeerJS connection |
 | `viewer.html` / `viewer.js` | new tab (friend) | Join UI, video playback, input capture |
 | `vendor/peerjs.min.js` | shared | Bundled PeerJS client (can't load remote scripts in an extension) |
-| `shared/rtc-config.js` | shared | STUN/TURN server list, passed into PeerJS's config |
+| `shared/rtc-config.js` | shared | STUN server list (+ your optional TURN), passed into PeerJS's config |
+| `settings.html` / `settings.js` | options page | Add and test your own TURN server for strict networks |
+
+## Stability features
+
+- **Auto-reconnect.** If the link drops (Wi-Fi blip, mobile signal loss,
+  laptop sleep), the viewer notices within ~10 seconds via a heartbeat and
+  rejoins the same code with backoff — no new code needed. The host accepts
+  the rejoin in place of the stale connection.
+- **Broker recovery.** If the host loses contact with the PeerJS broker, it
+  re-registers the *same* code automatically. A session already in progress
+  isn't affected (video and input are peer-to-peer).
+- **Multiple STUN providers** (Google, Cloudflare, Xiaomi), so one being
+  blocked in a region — e.g. Google in mainland China — doesn't break
+  connection setup.
+- **Slow-link friendly.** Video is tagged as screen content, so under low
+  bandwidth it drops frame rate rather than sharpness; mouse moves are
+  throttled and skipped when the link is congested, so clicks and keys
+  aren't delayed behind them. The viewer shows live latency.
+- **Optional TURN server** in Connection settings, with a Test button.
 
 ## Honest limitations
 
@@ -78,10 +97,12 @@ Chrome.
   Chrome won't let capture silently follow you to a new tab — see "How it
   works" above. This keeps the extension on the narrow `activeTab`
   permission rather than needing `<all_urls>`.
-- **Not literally "perfect."** No dedicated TURN server means very
-  restrictive networks (strict corporate firewalls, some mobile carriers)
-  can occasionally fail to connect P2P even with the free public STUN/TURN
-  fallback wired in.
+- **No built-in relay.** The free public TURN relay this used to rely on
+  (Open Relay, `openrelay.metered.ca`) has shut down, and no free relay
+  works without an account. Very restrictive networks (strict corporate
+  firewalls, carrier-grade NAT on some mobile networks, national firewalls)
+  may not connect directly — add a free-tier TURN account under
+  **Connection settings** (only one of you needs it).
 - **Relies on a third party's free public server** (PeerJS's `0.peerjs.com`)
   to carry the connection *handshake* — your session ID and the WebRTC
   offer/answer/ICE metadata pass through it briefly. The video/keystrokes

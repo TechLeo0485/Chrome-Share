@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>TabShare — Connection settings</title>
+  <style>
+    html, body {
+      margin: 0;
+      font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #202124;
+      color: #e8eaed;
+    }
+    main { max-width: 560px; margin: 48px auto; padding: 0 20px; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    h2 { font-size: 15px; margin-top: 28px; }
+    p, li { font-size: 13px; line-height: 1.5; color: #bdc1c6; }
+    label { display: block; font-size: 13px; margin: 14px 0 4px; color: #e8eaed; }
+    input, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      font-size: 14px;
+      font-family: monospace;
+      border-radius: 6px;
+      border: 1px solid #555;
+      background: #303134;
+      color: #e8eaed;
+    }
+    textarea { min-height: 76px; resize: vertical; }
+    .row { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+    button {
+      padding: 9px 16px;
+      border-radius: 6px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      background: #3c4043;
+      color: #e8eaed;
+    }
+    button.primary { background: #1a73e8; color: white; }
+    #status { margin-top: 14px; font-size: 13px; min-height: 18px; }
+    .ok { color: #81c995; }
+    .error { color: #f28b82; }
+    .muted { color: #9aa0a6; }
+    code { background: #303134; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Connection settings</h1>
+    <p>
+      Most connections work directly, with no setup. On very strict networks (some mobile
+      carriers, office/school firewalls, or across national firewalls) a direct connection
+      can't be made and the video has to be <em>relayed</em> through a TURN server.
+      There's no free public relay that works without an account, so this extension doesn't
+      ship one — but you can add your own.
+    </p>
+
+    <h2>Your TURN server (optional)</h2>
+    <p>
+      Several TURN providers offer a free tier with sign-up — search for "free TURN server".
+      Copy the TURN URL(s), username and password they give you below.
+      <strong>Only one of you</strong> (host or friend) needs to set this up.
+    </p>
+
+    <label for="urls">TURN URL(s) — one per line</label>
+    <textarea id="urls" placeholder="turn:relay.example.com:80&#10;turn:relay.example.com:443?transport=tcp&#10;turns:relay.example.com:443"></textarea>
+
+    <label for="username">Username</label>
+    <input id="username" type="text" autocomplete="off" />
+
+    <label for="credential">Password / credential</label>
+    <input id="credential" type="password" autocomplete="off" />
+
+    <div class="row">
+      <button id="saveBtn" class="primary">Save</button>
+      <button id="testBtn">Test</button>
+      <button id="clearBtn">Remove</button>
+    </div>
+    <div id="status"></div>
+
+    <h2>Tips for a more stable session</h2>
+    <ul>
+      <li>Settings apply to the <em>next</em> share or join — restart an active one to use them.</li>
+      <li>Include a <code>turn:…:443?transport=tcp</code> or <code>turns:…:443</code> URL if your provider offers one — those get through the most firewalls.</li>
+      <li>If the connection drops, the viewer reconnects on its own with the same code. Nobody needs to re-send anything.</li>
+      <li>On slow links, the picture lowers its frame rate first to keep text sharp — that's expected.</li>
+    </ul>
+  </main>
+  <script src="shared/rtc-config.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>
