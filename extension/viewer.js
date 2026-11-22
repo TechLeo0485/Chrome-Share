@@ -6,43 +6,66 @@
 // Resilience: long-distance and mobile links drop often, so the viewer
 // watches its own connection (heartbeat over the data channel + WebRTC
 // connection state) and, if it dies, quietly rejoins the same host code with
-// backoff. The host keeps the same code for the whole session and accepts the
-// rejoin in place of the stale connection, so nobody has to re-send anything.
+// backoff. The host keeps the same code for the whole session and recognises
+// this viewer's clientId, so the rejoin is let straight back in.
+//
+// If the broker itself is unreachable, the "Manual" tab connects with an
+// invite/reply code exchange instead (shared/manual-link.js) — no server.
 
-const joinScreen = document.getElementById("joinScreen");
-const hostCodeInput = document.getElementById("hostCodeInput");
-const joinBtn = document.getElementById("joinBtn");
-const joinStatus = document.getElementById("joinStatus");
+const $ = (id) => document.getElementById(id);
+const joinScreen = $("joinScreen");
+const hostCodeInput = $("hostCodeInput");
+const nameInput = $("nameInput");
+const joinBtn = $("joinBtn");
+const joinStatus = $("joinStatus");
+const tabCodeBtn = $("tabCodeBtn");
+const tabManualBtn = $("tabManualBtn");
+const codePane = $("codePane");
+const manualPane = $("manualPane");
+const inviteInput = $("inviteInput");
+const createReplyBtn = $("createReplyBtn");
+const replyOutput = $("replyOutput");
+const copyReplyBtn = $("copyReplyBtn");
+const manualStatus = $("manualStatus");
 
-const sessionScreen = document.getElementById("sessionScreen");
-const sessionStatus = document.getElementById("sessionStatus");
-const leaveBtn = document.getElementById("leaveBtn");
-const videoWrap = document.getElementById("videoWrap");
-const remoteVideo = document.getElementById("remoteVideo");
-const linkPopup = document.getElementById("linkPopup");
-const linkPopupUrl = document.getElementById("linkPopupUrl");
-const linkPopupCopy = document.getElementById("linkPopupCopy");
+const sessionScreen = $("sessionScreen");
+const sessionStatus = $("sessionStatus");
+const statsEl = $("stats");
+const viewOnlyBadge = $("viewOnlyBadge");
+const qualitySelect = $("qualitySelect");
+const leaveBtn = $("leaveBtn");
+const videoWrap = $("videoWrap");
+const remoteVideo = $("remoteVideo");
+const videoOverlay = $("videoOverlay");
+const linkPopup = $("linkPopup");
+const linkPopupUrl = $("linkPopupUrl");
+const linkPopupCopy = $("linkPopupCopy");
 
 let peer = null;
 let dataConn = null;
-let mediaCall = null;
+let mediaCall = null; // PeerJS MediaConnection, or { peerConnection, close } in manual mode
 let heldButton = "none";
 let hostViewport = null; // the host's real window.innerWidth/innerHeight, in CSS pixels
 
 // ---- Connection state ----
 let iceServers = null;
 let currentHostId = null;
-let inSession = false; // video has been shown at least once for this join
-let leaving = false; // user clicked Leave / gave up — suppress auto-reconnect
+let clientId = null; // random per join; lets the host recognise our reconnects
+let manualMode = false;
+let inSession = false; // the host accepted us at least once for this join
+let leaving = false; // user clicked Leave / gave up / was denied — no auto-reconnect
 let pendingConnect = false; // connect to the host as soon as the broker is open
+let awaitingApproval = false;
+let controlAllowed = true;
 let reconnectTimer = null;
 let reconnectAttempt = 0;
 let connectTimeoutTimer = null;
 let heartbeatTimer = null;
 let lastPongAt = 0;
 let lastRttMs = null;
+let prevVideoStats = null;
 
-const CONNECT_TIMEOUT_MS = 20000; // per attempt: data channel open + video arriving
+const CONNECT_TIMEOUT_MS = 20000; // per attempt, not counting time waiting for approval
 const HEARTBEAT_MS = 2000;
 const HEARTBEAT_TIMEOUT_MS = 10000;
 const MAX_RECONNECT_ATTEMPTS = 30; // ~4–5 minutes with the backoff below
@@ -58,9 +81,34 @@ const RECOVERABLE_PEER_ERRORS = new Set([
   "webrtc"
 ]);
 
+// ---- Small per-viewer preferences (localStorage may be unavailable) ----
+function loadPref(key, fallback) {
+  try {
+    const v = localStorage.getItem("tabshare." + key);
+    return v == null ? fallback : v;
+  } catch (_e) {
+    return fallback;
+  }
+}
+function savePref(key, value) {
+  try {
+    localStorage.setItem("tabshare." + key, value);
+  } catch (_e) {}
+}
+
+nameInput.value = loadPref("name", "");
+qualitySelect.value = loadPref("quality", "auto");
+if (!qualitySelect.value) qualitySelect.value = "auto";
+
+// ---- Status helpers ----
 function setJoinStatus(text, isError) {
   joinStatus.textContent = text;
   joinStatus.className = isError ? "error" : "";
+}
+
+function setManualStatus(text, cls) {
+  manualStatus.textContent = text;
+  manualStatus.className = cls || "";
 }
 
 function setSessionStatus(text, cls) {
@@ -68,37 +116,83 @@ function setSessionStatus(text, cls) {
   sessionStatus.className = cls || "";
 }
 
-// Shows progress wherever the user currently is (join screen or session).
-function setProgress(text) {
-  if (inSession) setSessionStatus(text, "reconnecting");
-  else setJoinStatus(text);
+function setOverlay(text) {
+  videoOverlay.textContent = text || "";
+  videoOverlay.style.display = text ? "flex" : "none";
 }
+
+// Shows progress wherever the user currently is.
+function setProgress(text) {
+  if (inSession) {
+    setSessionStatus(text, "reconnecting");
+    setOverlay(text);
+  } else if (manualMode) {
+    setManualStatus(text);
+  } else {
+    setJoinStatus(text);
+  }
+}
+
+// ---- Join screen tabs ----
+function selectTab(manual) {
+  tabCodeBtn.classList.toggle("active", !manual);
+  tabManualBtn.classList.toggle("active", manual);
+  codePane.style.display = manual ? "none" : "block";
+  manualPane.style.display = manual ? "block" : "none";
+}
+tabCodeBtn.addEventListener("click", () => selectTab(false));
+tabManualBtn.addEventListener("click", () => selectTab(true));
 
 joinBtn.addEventListener("click", () => join(hostCodeInput.value.trim()));
 hostCodeInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") join(hostCodeInput.value.trim());
 });
+nameInput.addEventListener("change", () => savePref("name", nameInput.value.trim()));
+
+function newClientId() {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function resetForNewAttempt() {
+  leaving = false;
+  inSession = false;
+  awaitingApproval = false;
+  controlAllowed = true;
+  reconnectAttempt = 0;
+  lastRttMs = null;
+  prevVideoStats = null;
+  clientId = newClientId();
+  savePref("name", nameInput.value.trim());
+}
+
+// ===================== Code (PeerJS broker) mode =====================
 
 async function join(hostId) {
   if (!hostId) {
     setJoinStatus("Enter the code your friend sent you.", true);
     return;
   }
+  if (hostId.startsWith("TSI1.")) {
+    selectTab(true);
+    inviteInput.value = hostId;
+    setManualStatus("That's a manual invite code — click “Create reply code”.");
+    return;
+  }
   joinBtn.disabled = true;
   setJoinStatus("Connecting…");
 
-  leaving = false;
-  inSession = false;
+  resetForNewAttempt();
+  manualMode = false;
   currentHostId = hostId;
-  reconnectAttempt = 0;
   iceServers = await self.TABSHARE_loadIceServers();
   pendingConnect = true;
   ensurePeerThenConnect();
 }
 
 // Makes sure we have a live connection to the broker, then connects to the
-// host. Reuses the existing Peer when possible (cheaper and faster than a new
-// broker registration).
+// host. Reuses the existing Peer when possible.
 function ensurePeerThenConnect() {
   if (peer && !peer.destroyed && peer.open) {
     connectToHost();
@@ -112,11 +206,7 @@ function ensurePeerThenConnect() {
       /* fall through to a fresh Peer */
     }
   }
-  if (peer) {
-    try {
-      peer.destroy();
-    } catch (_e) {}
-  }
+  destroyPeer();
 
   const p = new Peer({ config: { iceServers } });
   peer = p;
@@ -137,9 +227,8 @@ function ensurePeerThenConnect() {
     if (p !== peer || leaving) return;
     const type = err && err.type;
     if (type === "peer-unavailable") {
-      // On the very first join this almost always means a mistyped or
-      // expired code. Mid-session it usually means the host is itself
-      // briefly reconnecting to the broker — keep trying.
+      // First join: almost always a mistyped or expired code. Mid-session it
+      // usually means the host is briefly reconnecting to the broker.
       if (!inSession) failJoin("That code isn't an active session right now. Check it and try again.");
       else scheduleReconnect();
       return;
@@ -164,7 +253,7 @@ function ensurePeerThenConnect() {
     call.on("stream", (stream) => {
       if (call !== mediaCall) return;
       remoteVideo.srcObject = stream;
-      onConnected();
+      setOverlay("");
     });
     call.on("close", () => {
       if (call !== mediaCall || leaving) return;
@@ -174,15 +263,7 @@ function ensurePeerThenConnect() {
       if (call !== mediaCall || leaving) return;
       scheduleReconnect();
     });
-    // "failed" is final; "disconnected" often heals by itself, and if it
-    // doesn't the heartbeat timeout below catches it.
-    const pc = call.peerConnection;
-    if (pc) {
-      pc.addEventListener("connectionstatechange", () => {
-        if (call !== mediaCall || leaving) return;
-        if (pc.connectionState === "failed") scheduleReconnect();
-      });
-    }
+    watchPeerConnection(call.peerConnection, () => call === mediaCall);
   });
 }
 
@@ -192,31 +273,75 @@ function connectToHost() {
 
   const conn = peer.connect(currentHostId, { reliable: true });
   dataConn = conn;
+  armConnectTimeout(conn);
+  wireHostDataConnection(conn);
+}
 
+function armConnectTimeout(conn) {
   clearTimeout(connectTimeoutTimer);
   connectTimeoutTimer = setTimeout(() => {
-    if (conn !== dataConn || leaving) return;
+    if (conn !== dataConn || leaving || awaitingApproval) return;
     scheduleReconnect();
   }, CONNECT_TIMEOUT_MS);
+}
 
+// "failed" is final; "disconnected" often heals by itself, and if it doesn't
+// the heartbeat timeout catches it.
+function watchPeerConnection(pc, isCurrent) {
+  if (!pc) return;
+  pc.addEventListener("connectionstatechange", () => {
+    if (!isCurrent() || leaving) return;
+    if (pc.connectionState === "failed") scheduleReconnect();
+  });
+}
+
+// Data-channel handling shared by code mode and manual mode.
+function wireHostDataConnection(conn) {
   conn.on("open", () => {
     if (conn !== dataConn) return;
     lastPongAt = Date.now();
     startHeartbeat();
-    setProgress("Connected — waiting for video…");
+    try {
+      conn.send({ type: "hello", clientId, name: nameInput.value.trim() });
+    } catch (_e) {}
+    if (!inSession) setProgress("Connected — waiting for your friend…");
   });
   conn.on("data", (msg) => {
     if (conn !== dataConn || !msg) return;
-    if (msg.type === "pong") {
-      lastPongAt = Date.now();
-      if (typeof msg.t === "number") {
-        lastRttMs = Date.now() - msg.t;
-        if (inSession && !reconnectTimer) showConnectedStatus();
-      }
-    } else if (msg.type === "viewport-update" && msg.width && msg.height) {
-      hostViewport = { width: msg.width, height: msg.height };
-    } else if (msg.type === "link-at-cursor") {
-      showLinkPopup(msg.url);
+    switch (msg.type) {
+      case "pong":
+        lastPongAt = Date.now();
+        if (typeof msg.t === "number") lastRttMs = Date.now() - msg.t;
+        break;
+      case "awaiting-approval":
+        awaitingApproval = true;
+        clearTimeout(connectTimeoutTimer);
+        setProgress("Waiting for your friend to let you in…");
+        break;
+      case "join-accepted":
+        awaitingApproval = false;
+        onAccepted();
+        break;
+      case "join-denied":
+        stopWithMessage(
+          msg.reason === "timeout"
+            ? "Your friend didn't respond in time. Ask them to watch for your request, then try again."
+            : "Your friend declined the request."
+        );
+        break;
+      case "kicked":
+        stopWithMessage("Your friend ended your access to the shared tab.");
+        break;
+      case "control-state":
+        controlAllowed = !!msg.allowed;
+        renderControlState();
+        break;
+      case "viewport-update":
+        if (msg.width && msg.height) hostViewport = { width: msg.width, height: msg.height };
+        break;
+      case "link-at-cursor":
+        showLinkPopup(msg.url);
+        break;
     }
   });
   conn.on("close", () => {
@@ -229,24 +354,176 @@ function connectToHost() {
   });
 }
 
-function onConnected() {
+function onAccepted() {
   clearTimeout(connectTimeoutTimer);
   reconnectAttempt = 0;
   inSession = true;
   showSessionScreen();
-  showConnectedStatus();
+  if (!remoteVideo.srcObject) setOverlay("Waiting for video…");
+  else setOverlay("");
+  sendInput({ type: "set-quality", level: qualitySelect.value });
+  renderControlState();
+  renderStatus();
   videoWrap.focus();
 }
 
-function showConnectedStatus() {
-  if (lastRttMs == null) {
-    setSessionStatus("Connected — you're in control.");
-  } else if (lastRttMs > SLOW_RTT_MS) {
-    setSessionStatus("Connected — you're in control · " + lastRttMs + " ms (slow connection, expect lag)", "slow");
-  } else {
-    setSessionStatus("Connected — you're in control · " + lastRttMs + " ms");
+// ===================== Manual (no server) mode =====================
+
+async function createManualReply() {
+  const code = inviteInput.value.trim();
+  if (!code) {
+    setManualStatus("Paste the invite code your friend sent you.", "error");
+    return;
+  }
+  createReplyBtn.disabled = true;
+  replyOutput.style.display = "none";
+  copyReplyBtn.style.display = "none";
+  setManualStatus("Creating reply… (a few seconds)");
+
+  cleanupConnections();
+  resetForNewAttempt();
+  manualMode = true;
+  currentHostId = null;
+  iceServers = await self.TABSHARE_loadIceServers();
+
+  let offer;
+  try {
+    offer = await self.TabshareManual.decode(code, "offer");
+  } catch (e) {
+    setManualStatus(e.message, "error");
+    createReplyBtn.disabled = false;
+    return;
+  }
+
+  try {
+    const pc = new RTCPeerConnection({ iceServers });
+    const call = {
+      peerConnection: pc,
+      close() {
+        try {
+          pc.close();
+        } catch (_e) {}
+      }
+    };
+    mediaCall = call;
+    pc.addEventListener("track", (e) => {
+      if (mediaCall !== call) return;
+      remoteVideo.srcObject = e.streams[0] || new MediaStream([e.track]);
+      setOverlay("");
+    });
+    pc.addEventListener("datachannel", (e) => {
+      if (mediaCall !== call) return;
+      const conn = self.TabshareManual.wrapChannel(e.channel);
+      dataConn = conn;
+      wireHostDataConnection(conn);
+    });
+    watchPeerConnection(pc, () => mediaCall === call);
+
+    await pc.setRemoteDescription(offer);
+    await pc.setLocalDescription(await pc.createAnswer());
+    await self.TabshareManual.waitForIceGathering(pc, 6000);
+    if (mediaCall !== call) return;
+    replyOutput.value = await self.TabshareManual.encode(pc.localDescription);
+    replyOutput.style.display = "block";
+    copyReplyBtn.style.display = "";
+    setManualStatus("Send this reply code to your friend. You'll connect as soon as they paste it.", "ok");
+  } catch (e) {
+    cleanupConnections();
+    setManualStatus("Couldn't create a reply: " + e.message + ". Ask your friend for a fresh invite.", "error");
+  } finally {
+    createReplyBtn.disabled = false;
   }
 }
+
+createReplyBtn.addEventListener("click", createManualReply);
+copyReplyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(replyOutput.value);
+    copyReplyBtn.textContent = "Copied!";
+  } catch (_e) {
+    copyReplyBtn.textContent = "Copy failed — select and copy manually";
+  }
+  setTimeout(() => (copyReplyBtn.textContent = "Copy reply"), 1500);
+});
+
+// ===================== Session status, stats, quality =====================
+
+function renderControlState() {
+  viewOnlyBadge.style.display = controlAllowed ? "none" : "";
+  videoWrap.classList.toggle("viewOnly", !controlAllowed);
+  if (inSession && !reconnectTimer) renderStatus();
+}
+
+function renderStatus() {
+  if (!controlAllowed) setSessionStatus("Connected — view only");
+  else setSessionStatus("Connected — you're in control");
+}
+
+qualitySelect.addEventListener("change", () => {
+  savePref("quality", qualitySelect.value);
+  sendInput({ type: "set-quality", level: qualitySelect.value });
+  videoWrap.focus();
+});
+
+// Reads WebRTC stats for the video connection: whether it's direct or
+// relayed through a TURN server, frame rate, bitrate and packet loss.
+async function updateStats() {
+  const pc = mediaCall && mediaCall.peerConnection;
+  if (!pc || !inSession) {
+    statsEl.textContent = "";
+    return;
+  }
+  let report;
+  try {
+    report = await pc.getStats();
+  } catch (_e) {
+    return;
+  }
+  const byId = new Map();
+  let inbound = null;
+  let selectedPairId = null;
+  report.forEach((s) => {
+    byId.set(s.id, s);
+    if (s.type === "inbound-rtp" && s.kind === "video") inbound = s;
+    if (s.type === "transport" && s.selectedCandidatePairId) selectedPairId = s.selectedCandidatePairId;
+  });
+  let pair = selectedPairId ? byId.get(selectedPairId) : null;
+  if (!pair) {
+    report.forEach((s) => {
+      if (!pair && s.type === "candidate-pair" && s.nominated && s.state === "succeeded") pair = s;
+    });
+  }
+
+  const parts = [];
+  if (pair) {
+    const local = byId.get(pair.localCandidateId);
+    const remote = byId.get(pair.remoteCandidateId);
+    const relayed = (local && local.candidateType === "relay") || (remote && remote.candidateType === "relay");
+    parts.push(relayed ? "Relayed" : "Direct");
+  }
+  if (lastRttMs != null) parts.push(lastRttMs + " ms");
+  if (inbound) {
+    if (inbound.framesPerSecond != null) parts.push(Math.round(inbound.framesPerSecond) + " fps");
+    if (prevVideoStats && inbound.timestamp > prevVideoStats.timestamp) {
+      const secs = (inbound.timestamp - prevVideoStats.timestamp) / 1000;
+      const kbps = ((inbound.bytesReceived - prevVideoStats.bytesReceived) * 8) / secs / 1000;
+      parts.push(kbps >= 1000 ? (kbps / 1000).toFixed(1) + " Mbps" : Math.round(kbps) + " kbps");
+      const lost = (inbound.packetsLost || 0) - (prevVideoStats.packetsLost || 0);
+      const recv = (inbound.packetsReceived || 0) - (prevVideoStats.packetsReceived || 0);
+      if (lost > 0 && lost + recv > 0) {
+        const pct = (100 * lost) / (lost + recv);
+        if (pct >= 1) parts.push(pct.toFixed(0) + "% loss");
+      }
+    }
+    prevVideoStats = inbound;
+  }
+  statsEl.textContent = parts.join(" · ");
+  const slow = lastRttMs != null && lastRttMs > SLOW_RTT_MS;
+  statsEl.className = slow ? "slow" : "";
+  statsEl.title = slow ? "Slow connection — try a lower quality setting if it feels laggy." : "";
+}
+
+// ===================== Heartbeat & reconnect =====================
 
 function startHeartbeat() {
   stopHeartbeat();
@@ -259,6 +536,7 @@ function startHeartbeat() {
     try {
       dataConn.send({ type: "ping", t: Date.now() });
     } catch (_e) {}
+    updateStats();
   }, HEARTBEAT_MS);
 }
 
@@ -287,12 +565,46 @@ function closeHostConnections() {
   }
 }
 
+function destroyPeer() {
+  if (peer) {
+    try {
+      peer.destroy();
+    } catch (_e) {}
+    peer = null;
+  }
+}
+
+function cleanupConnections() {
+  pendingConnect = false;
+  clearTimeout(connectTimeoutTimer);
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  closeHostConnections();
+  destroyPeer();
+}
+
 function scheduleReconnect() {
-  if (leaving || reconnectTimer || !currentHostId) return;
+  if (leaving || reconnectTimer) return;
+
+  if (manualMode) {
+    // No broker means no way to redo the handshake automatically.
+    if (inSession) {
+      stopWithMessage("Connection lost. Manual connections can't reconnect by themselves — ask your friend for a new invite code.");
+    } else {
+      leaving = true;
+      cleanupConnections();
+      setManualStatus("Couldn't connect. Ask your friend for a fresh invite and try again — or add a TURN server in Connection settings.", "error");
+    }
+    return;
+  }
+  if (!currentHostId) return;
+
   clearTimeout(connectTimeoutTimer);
   closeHostConnections();
   heldButton = "none";
   lastRttMs = null;
+  prevVideoStats = null;
+  awaitingApproval = false;
 
   reconnectAttempt++;
   if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
@@ -315,37 +627,43 @@ function retryNow() {
   ensurePeerThenConnect();
 }
 
-// The OS says the network is back (Wi-Fi rejoined, mobile data returned) —
-// don't sit out the rest of the backoff delay.
+// The OS says the network is back — don't sit out the rest of the backoff.
 window.addEventListener("online", () => {
   if (reconnectTimer) retryNow();
 });
 
 function giveUp() {
   if (inSession) {
-    leaving = true;
-    closeHostConnections();
-    setSessionStatus("Couldn't reconnect. Check your friend is still sharing, then click Leave and join again.", "error");
+    stopWithMessage("Couldn't reconnect. Check your friend is still sharing, then click Leave and join again.");
   } else {
     failJoin(
-      "Couldn't connect. Check your internet, make sure your friend is still sharing, and try again. " +
-        "On very restrictive networks, adding a TURN server in Connection settings can help."
+      "Couldn't connect. Check your internet and that your friend is still sharing, then try again. " +
+        "If the code never works, try the Manual tab."
     );
   }
 }
 
+// Ends the session but keeps the session screen up with an explanation.
+function stopWithMessage(message) {
+  leaving = true;
+  if (!inSession) {
+    if (manualMode) {
+      cleanupConnections();
+      setManualStatus(message, "error");
+    } else {
+      failJoin(message);
+    }
+    return;
+  }
+  cleanupConnections();
+  setSessionStatus(message, "error");
+  setOverlay(message);
+  statsEl.textContent = "";
+}
+
 function failJoin(message) {
   leaving = true;
-  clearTimeout(connectTimeoutTimer);
-  clearTimeout(reconnectTimer);
-  reconnectTimer = null;
-  closeHostConnections();
-  if (peer) {
-    try {
-      peer.destroy();
-    } catch (_e) {}
-    peer = null;
-  }
+  cleanupConnections();
   currentHostId = null;
   joinBtn.disabled = false;
   setJoinStatus(message, true);
@@ -362,26 +680,26 @@ leaveBtn.addEventListener("click", () => {
 
 function cleanupAndReturnToJoinScreen(message) {
   leaving = true;
-  pendingConnect = false;
-  clearTimeout(connectTimeoutTimer);
-  clearTimeout(reconnectTimer);
-  reconnectTimer = null;
-  closeHostConnections();
-  if (peer) {
-    try { peer.destroy(); } catch (_e) {}
-    peer = null;
-  }
+  cleanupConnections();
   currentHostId = null;
   inSession = false;
+  manualMode = false;
   lastRttMs = null;
   hostViewport = null;
   remoteVideo.srcObject = null;
   sessionScreen.style.display = "none";
   joinScreen.style.display = "block";
   hostCodeInput.value = "";
+  inviteInput.value = "";
+  replyOutput.value = "";
+  replyOutput.style.display = "none";
+  copyReplyBtn.style.display = "none";
   joinBtn.disabled = false;
   setJoinStatus(message || "");
+  setManualStatus("");
   setSessionStatus("Connecting…");
+  setOverlay("");
+  statsEl.textContent = "";
   hideLinkPopup();
 }
 
@@ -457,7 +775,11 @@ document.addEventListener("mousedown", (e) => {
 // ---- Input capture: translate the viewer's mouse/keyboard into normalized
 // coordinates + CDP-shaped key data, and forward over the data connection. ----
 
+const CONTROL_TYPES = new Set(["mousemove", "mousedown", "mouseup", "wheel", "keydown", "keyup"]);
+
 function sendInput(obj) {
+  // View-only: the host enforces this too; skipping here just saves bandwidth.
+  if (!controlAllowed && CONTROL_TYPES.has(obj.type)) return;
   if (dataConn && dataConn.open) {
     try {
       dataConn.send(obj);

@@ -2,11 +2,12 @@
 // tab's video/audio and relays incoming input events from the friend to the
 // background service worker for injection via chrome.debugger.
 //
-// Signaling uses PeerJS (shared/vendor/peerjs.min.js) against its free public
-// broker (0.peerjs.com) — no server of our own, no account, and no manual
-// code-pasting round trip: the friend enters one short ID and everything
-// else (offer/answer/ICE) happens automatically over that broker. The actual
-// video/audio/input still flows directly peer-to-peer, same as before.
+// Signaling normally uses PeerJS (vendor/peerjs.min.js) against its free
+// public broker (0.peerjs.com) — no server of our own, no account: the friend
+// enters one short code and the offer/answer/ICE exchange happens
+// automatically. If that broker is unreachable, a manual invite/reply code
+// exchange (shared/manual-link.js) connects with no server at all. Either way
+// the video/audio/input flows directly peer-to-peer.
 
 let peer = null;
 let dataConn = null;
@@ -52,6 +53,11 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "switch-tab") switchCapturedTab(msg.tabId, msg.streamId);
   if (msg.type === "check-viewport-now") checkViewportOnce();
   if (msg.type === "end-host-session") endHostSession();
+  if (msg.type === "join-decision") resolveJoinRequest(msg.requestId, !!msg.allow, msg.allow ? "" : "denied");
+  if (msg.type === "set-control-allowed") setControlAllowed(msg.allowed);
+  if (msg.type === "kick-friend") kickFriend();
+  if (msg.type === "manual-create-invite") createManualInvite();
+  if (msg.type === "manual-accept-reply") acceptManualReply(msg.code);
 });
 
 function randomPeerId() {
@@ -211,32 +217,184 @@ function scheduleBrokerReconnect() {
   }, delay);
 }
 
-// The friend's viewer connects to us first (data channel for input) using
-// the code we showed them. Once that's open we know their peer ID, so we
-// call *them* with our captured stream — no separate step needed.
+// ---- Friend admission ----
 //
-// If a connection is already active, this is almost always the same friend
-// rejoining after their network dropped (the viewer reconnects on its own),
-// so the newest connection replaces the stale one.
+// The broker is a shared public namespace, so the session code is the only
+// thing standing between a stranger and the host's tab. To be safe, a new
+// viewer must be explicitly allowed by the host (Allow / Deny on the host
+// panel). Each viewer introduces itself with a random clientId that stays
+// the same across its automatic reconnects, so once allowed, a friend whose
+// network blips is let straight back in without asking the host again.
+
+const APPROVAL_TIMEOUT_MS = 90000;
+const HELLO_TIMEOUT_MS = 15000;
+let approvedClientIds = new Set();
+let pendingJoin = null; // { conn, clientId, name, requestId, timer }
+let controlAllowed = true;
+let friendName = "";
+
+function cleanName(name) {
+  const s = String(name || "").replace(/[\u0000-\u001f]/g, "").trim().slice(0, 40);
+  return s || "Your friend";
+}
+
+// Every connection — pending, active, PeerJS or manual — answers heartbeats,
+// so the viewer doesn't think the link died while waiting to be allowed in.
+function attachPingResponder(conn) {
+  conn.on("data", (msg) => {
+    if (msg && msg.type === "ping") {
+      if (conn === dataConn) lastFriendPingAt = Date.now();
+      try {
+        conn.send({ type: "pong", t: msg.t });
+      } catch (_e) {}
+    }
+  });
+}
+
+// The friend's viewer connects to us first (data channel for input) using
+// the code we showed them, and introduces itself with a "hello". Once the
+// host allows it, we call *them* with our captured stream.
 function handleIncomingConnection(conn) {
+  attachPingResponder(conn);
+  let introduced = false;
+  const helloTimer = setTimeout(() => {
+    if (!introduced) {
+      try {
+        conn.close();
+      } catch (_e) {}
+    }
+  }, HELLO_TIMEOUT_MS);
+
+  conn.on("data", (msg) => {
+    if (introduced || !msg || msg.type !== "hello") return;
+    introduced = true;
+    clearTimeout(helloTimer);
+    const clientId = String(msg.clientId || "").slice(0, 64);
+    const name = cleanName(msg.name);
+    if (clientId && approvedClientIds.has(clientId)) {
+      acceptFriend(conn, { name, startCall: true });
+    } else {
+      requestApproval(conn, clientId, name);
+    }
+  });
+
+  conn.on("close", () => {
+    clearTimeout(helloTimer);
+    if (pendingJoin && pendingJoin.conn === conn) {
+      clearTimeout(pendingJoin.timer);
+      pendingJoin = null;
+      notifyHost({ type: "join-resolved", outcome: "left" });
+    }
+  });
+}
+
+function requestApproval(conn, clientId, name) {
+  if (pendingJoin) resolveJoinRequest(pendingJoin.requestId, false, "replaced");
+  const requestId = randomPeerId();
+  pendingJoin = {
+    conn,
+    clientId,
+    name,
+    requestId,
+    timer: setTimeout(() => resolveJoinRequest(requestId, false, "timeout"), APPROVAL_TIMEOUT_MS)
+  };
+  try {
+    conn.send({ type: "awaiting-approval" });
+  } catch (_e) {}
+  notifyHost({ type: "join-request", requestId, name });
+}
+
+function resolveJoinRequest(requestId, allow, reason) {
+  if (!pendingJoin || pendingJoin.requestId !== requestId) return;
+  const { conn, clientId, name, timer } = pendingJoin;
+  clearTimeout(timer);
+  pendingJoin = null;
+  notifyHost({ type: "join-resolved", outcome: allow ? "allowed" : reason || "denied" });
+  if (!conn.open) return;
+  if (allow) {
+    if (clientId) approvedClientIds.add(clientId);
+    acceptFriend(conn, { name, startCall: true });
+  } else {
+    try {
+      conn.send({ type: "join-denied", reason: reason || "denied" });
+    } catch (_e) {}
+    setTimeout(() => {
+      try {
+        conn.close();
+      } catch (_e) {}
+    }, 500);
+  }
+}
+
+// Makes `conn` the active friend connection. Either starts the PeerJS video
+// call (startCall) or adopts an already-negotiated manual RTCPeerConnection
+// (mediaPc). Any previous friend connection — usually the same friend's
+// stale pre-reconnect one — is closed.
+function acceptFriend(conn, { name, startCall, mediaPc }) {
   closeFriendConnections();
   dataConn = conn;
+  friendName = name || "Your friend";
   wireDataConnection(conn);
-  conn.on("open", () => {
-    if (conn !== dataConn || !peer) return;
-    lastFriendPingAt = Date.now();
-    startFriendWatchdog();
-    notifyHost({ type: "datachannel-open" });
+  lastFriendPingAt = Date.now();
+  startFriendWatchdog();
+  notifyHost({ type: "datachannel-open", name: friendName, controlAllowed });
+
+  try {
+    conn.send({ type: "join-accepted" });
+    conn.send({ type: "control-state", allowed: controlAllowed });
     if (currentViewport) {
       conn.send({ type: "viewport-update", width: currentViewport.width, height: currentViewport.height });
     }
+  } catch (_e) {}
+
+  if (startCall && peer && !peer.destroyed) {
     const call = peer.call(conn.peer, localStream);
     mediaConn = call;
     call.on("error", (err) => {
       if (call !== mediaConn) return;
       notifyHost({ type: "session-error", error: "Video call error: " + err.message });
     });
-  });
+  } else if (mediaPc) {
+    mediaConn = {
+      peerConnection: mediaPc,
+      close() {
+        try {
+          mediaPc.close();
+        } catch (_e) {}
+      }
+    };
+    // The invite may have been created before a tab switch/resize replaced
+    // the capture — make sure the live tracks are the current ones.
+    swapLiveTrack(localStream);
+  }
+  applyQuality();
+}
+
+function setControlAllowed(allowed) {
+  controlAllowed = !!allowed;
+  if (dataConn && dataConn.open) {
+    try {
+      dataConn.send({ type: "control-state", allowed: controlAllowed });
+    } catch (_e) {}
+  }
+}
+
+// Host clicked "Disconnect friend": drop them and forget their approval, so
+// rejoining with the same code requires asking again.
+function kickFriend() {
+  approvedClientIds = new Set();
+  if (dataConn && dataConn.open) {
+    try {
+      dataConn.send({ type: "kicked" });
+    } catch (_e) {}
+  }
+  const conn = dataConn;
+  setTimeout(() => {
+    if (dataConn === conn) {
+      closeFriendConnections();
+      notifyHost({ type: "datachannel-closed", kicked: true });
+    }
+  }, 300);
 }
 
 function closeFriendConnections() {
@@ -271,6 +429,106 @@ function startFriendWatchdog() {
 function stopFriendWatchdog() {
   if (friendWatchdogTimer) clearInterval(friendWatchdogTimer);
   friendWatchdogTimer = null;
+}
+
+// ---- Video quality (chosen by the viewer) ----
+// Applied to the outgoing video sender's encoding. Lower presets shrink the
+// resolution and frame rate, which is what keeps a weak link usable. Click
+// mapping isn't affected: it uses the host's real page size, not the video's.
+const QUALITY_PRESETS = {
+  auto: { maxBitrate: null, scale: 1, fps: 30 },
+  high: { maxBitrate: 4000000, scale: 1, fps: 30 },
+  medium: { maxBitrate: 1200000, scale: 1.5, fps: 20 },
+  low: { maxBitrate: 400000, scale: 2, fps: 12 }
+};
+let currentQuality = "auto";
+let qualityRetryTimer = null;
+
+function applyQuality(attempt) {
+  attempt = attempt || 0;
+  clearTimeout(qualityRetryTimer);
+  qualityRetryTimer = null;
+  const pc = mediaConn && mediaConn.peerConnection;
+  const sender = pc && pc.getSenders().find((s) => s.track && s.track.kind === "video");
+  const params = sender && sender.getParameters();
+  if (!params || !params.encodings || !params.encodings.length) {
+    // Not negotiated yet — try again shortly.
+    if (attempt < 20 && mediaConn) {
+      qualityRetryTimer = setTimeout(() => applyQuality(attempt + 1), 1000);
+    }
+    return;
+  }
+  const preset = QUALITY_PRESETS[currentQuality] || QUALITY_PRESETS.auto;
+  const enc = params.encodings[0];
+  if (preset.maxBitrate) enc.maxBitrate = preset.maxBitrate;
+  else delete enc.maxBitrate;
+  enc.scaleResolutionDownBy = preset.scale;
+  enc.maxFramerate = preset.fps;
+  sender.setParameters(params).catch(() => {});
+}
+
+// ---- Manual connection (no broker) ----
+// Host creates an invite code (SDP offer with all candidates), the friend
+// answers with a reply code, the host pastes it — done. Pasting the reply is
+// itself the host's approval, so no Allow/Deny prompt is needed.
+let manualPending = null; // { pc, conn }
+
+function discardManualPending() {
+  if (!manualPending) return;
+  try {
+    manualPending.pc.close();
+  } catch (_e) {}
+  manualPending = null;
+}
+
+async function createManualInvite() {
+  if (!sessionActive || !localStream) {
+    notifyHost({ type: "manual-error", error: "Sharing hasn't started yet." });
+    return;
+  }
+  discardManualPending();
+  try {
+    const pc = new RTCPeerConnection({ iceServers });
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+    const channel = pc.createDataChannel("tabshare", { ordered: true });
+    const conn = self.TabshareManual.wrapChannel(channel);
+    const pending = { pc, conn };
+    manualPending = pending;
+    attachPingResponder(conn);
+    conn.on("open", () => {
+      if (manualPending !== pending) return;
+      manualPending = null;
+      acceptFriend(conn, { name: "Your friend (manual connection)", mediaPc: pc });
+    });
+    pc.addEventListener("connectionstatechange", () => {
+      if (pc.connectionState === "failed" && dataConn === conn) {
+        closeFriendConnections();
+        notifyHost({ type: "datachannel-closed" });
+      }
+    });
+    await pc.setLocalDescription(await pc.createOffer());
+    await self.TabshareManual.waitForIceGathering(pc, 6000);
+    if (manualPending !== pending) return;
+    const code = await self.TabshareManual.encode(pc.localDescription);
+    notifyHost({ type: "manual-invite-ready", code });
+  } catch (e) {
+    discardManualPending();
+    notifyHost({ type: "manual-error", error: "Couldn't create an invite: " + e.message });
+  }
+}
+
+async function acceptManualReply(code) {
+  if (!manualPending) {
+    notifyHost({ type: "manual-error", error: "Create an invite code first (or create a new one — each is single-use)." });
+    return;
+  }
+  try {
+    const answer = await self.TabshareManual.decode(code, "answer");
+    await manualPending.pc.setRemoteDescription(answer);
+    notifyHost({ type: "manual-reply-accepted" });
+  } catch (e) {
+    notifyHost({ type: "manual-error", error: e.message });
+  }
 }
 
 // Called when background.js detects the host switched to a different tab in
@@ -308,12 +566,13 @@ async function switchCapturedTab(newTabId, newStreamId) {
 
 function wireDataConnection(conn) {
   conn.on("data", (msg) => {
-    if (conn !== dataConn) return;
-    if (msg && msg.type === "ping") {
-      lastFriendPingAt = Date.now();
-      try {
-        conn.send({ type: "pong", t: msg.t });
-      } catch (_e) {}
+    if (conn !== dataConn || !msg) return;
+    if (msg.type === "ping" || msg.type === "hello") return; // handled elsewhere
+    if (msg.type === "set-quality") {
+      if (QUALITY_PRESETS[msg.level]) {
+        currentQuality = msg.level;
+        applyQuality();
+      }
       return;
     }
     handleInputMessage(msg);
@@ -459,6 +718,11 @@ function handleInputMessage(msg) {
   // own side of the wire, blocks it regardless of what the viewer sends.
   if (msg.button === "right") return;
 
+  // View-only mode: the host turned control off. Enforced here, on the
+  // host's side, so a modified viewer can't bypass it.
+  const isControl = ["mousemove", "mousedown", "mouseup", "wheel", "keydown", "keyup"].includes(msg.type);
+  if (isControl && !controlAllowed) return;
+
   if (["mousemove", "mousedown", "mouseup", "wheel"].includes(msg.type)) {
     const x = msg.xNorm * currentViewport.width;
     const y = msg.yNorm * currentViewport.height;
@@ -507,6 +771,13 @@ function endHostSession() {
   sessionActive = false;
   if (brokerRetryTimer) clearTimeout(brokerRetryTimer);
   brokerRetryTimer = null;
+  clearTimeout(qualityRetryTimer);
+  discardManualPending();
+  if (pendingJoin) {
+    clearTimeout(pendingJoin.timer);
+    pendingJoin = null;
+  }
+  approvedClientIds = new Set();
   stopViewportWatcher();
   closeFriendConnections();
   if (peer) {

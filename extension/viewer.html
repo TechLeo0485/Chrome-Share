@@ -4,71 +4,125 @@
   <meta charset="utf-8" />
   <title>TabShare — Viewer</title>
   <style>
+    :root {
+      --bg: #202124;
+      --panel: #2a2b2e;
+      --field: #303134;
+      --border: #44464b;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --blue: #1a73e8;
+      --link: #8ab4f8;
+      --green: #81c995;
+      --amber: #fdd663;
+      --orange: #fcad70;
+      --red: #f28b82;
+    }
+    * { box-sizing: border-box; }
     html, body {
       margin: 0;
       height: 100%;
       font-family: -apple-system, Segoe UI, Roboto, sans-serif;
-      background: #202124;
-      color: #e8eaed;
+      background: var(--bg);
+      color: var(--text);
     }
 
-    .centerScreen {
-      max-width: 480px;
-      margin: 80px auto;
-      padding: 0 20px;
+    /* ---------- Join screen ---------- */
+    .centerScreen { max-width: 500px; margin: 64px auto; padding: 0 16px 40px; }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .brand img { width: 40px; height: 40px; }
+    .brand h1 { font-size: 21px; margin: 0; }
+    .brand p { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; }
+    .tabs { display: flex; gap: 4px; background: var(--field); border-radius: 10px; padding: 4px; margin-bottom: 18px; }
+    .tabs button {
+      flex: 1;
+      background: transparent;
+      color: var(--muted);
+      padding: 8px 10px;
+      font-size: 13px;
     }
-    .centerScreen h1 { font-size: 20px; }
-    input[type="text"] {
+    .tabs button.active { background: #3c4043; color: var(--text); }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+    input[type="text"], textarea {
       width: 100%;
-      box-sizing: border-box;
-      padding: 14px 16px;
-      font-size: 18px;
-      font-family: monospace;
-      text-align: center;
+      padding: 12px 14px;
       border-radius: 8px;
-      border: 1px solid #555;
-      background: #303134;
-      color: #e8eaed;
+      border: 1px solid var(--border);
+      background: var(--field);
+      color: var(--text);
+      font-size: 15px;
     }
-    .row { display: flex; gap: 8px; margin-top: 10px; }
+    input:focus, textarea:focus, select:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
+    #hostCodeInput { font-family: ui-monospace, Consolas, monospace; font-size: 17px; text-align: center; }
+    textarea { font-family: ui-monospace, Consolas, monospace; font-size: 12px; min-height: 84px; resize: vertical; word-break: break-all; }
+    .field { margin-bottom: 14px; }
     button {
       padding: 10px 18px;
-      border-radius: 6px;
+      border-radius: 8px;
       border: none;
       font-weight: 600;
+      font-size: 14px;
       cursor: pointer;
+      background: #3c4043;
+      color: var(--text);
     }
-    .primary { background: #1a73e8; color: white; width: 100%; }
-    #joinStatus { margin-top: 12px; font-size: 13px; color: #bbb; min-height: 18px; }
-    .error { color: #f28b82 !important; }
+    button:disabled { opacity: 0.55; cursor: default; }
+    .primary { background: var(--blue); color: white; width: 100%; }
+    .hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
+    #joinStatus, #manualStatus { margin-top: 12px; font-size: 13px; color: #bdc1c6; min-height: 18px; line-height: 1.45; }
+    .error { color: var(--red) !important; }
+    .ok { color: var(--green) !important; }
+    .settingsLink { margin-top: 18px; font-size: 12px; color: var(--muted); text-align: center; }
+    .settingsLink a { color: var(--link); }
 
-    #sessionScreen {
-      display: none;
-      height: 100%;
-      flex-direction: column;
-    }
+    /* ---------- Session screen ---------- */
+    #sessionScreen { display: none; height: 100%; flex-direction: column; }
     #topBar {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      gap: 12px;
       padding: 8px 14px;
-      background: #303134;
+      background: var(--field);
+      font-size: 13px;
+      flex-wrap: wrap;
+    }
+    #sessionStatus { font-weight: 600; }
+    #sessionStatus::before {
+      content: "";
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      margin-right: 8px;
+      vertical-align: 1px;
+    }
+    #sessionStatus.reconnecting { color: var(--amber); }
+    #sessionStatus.reconnecting::before { background: var(--amber); }
+    #sessionStatus.error { color: var(--red); }
+    #sessionStatus.error::before { background: var(--red); }
+    #stats { color: var(--muted); font-variant-numeric: tabular-nums; }
+    #stats.slow { color: var(--orange); }
+    #viewOnlyBadge {
+      background: #5f4b00;
+      color: var(--amber);
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .spacer { flex: 1; }
+    #topBar label { display: inline; margin: 0; }
+    select {
+      background: #3c4043;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 8px;
       font-size: 13px;
     }
-    #sessionStatus.reconnecting { color: #fdd663; }
-    #sessionStatus.slow { color: #fcad70; }
-    #sessionStatus.error { color: #f28b82; }
-    .settingsLink { margin-top: 24px; font-size: 12px; color: #9aa0a6; }
-    .settingsLink a { color: #8ab4f8; }
-    #leaveBtn {
-      padding: 6px 14px;
-      border-radius: 6px;
-      border: none;
-      background: #ea4335;
-      color: white;
-      font-weight: 600;
-      cursor: pointer;
-    }
+    #leaveBtn { padding: 6px 14px; background: #ea4335; color: white; font-size: 13px; }
     #videoWrap {
       position: relative;
       flex: 1;
@@ -79,11 +133,23 @@
       outline: none;
       background: #000;
     }
-    #remoteVideo {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      cursor: default;
+    #videoWrap.viewOnly #remoteVideo { cursor: not-allowed; }
+    #remoteVideo { width: 100%; height: 100%; object-fit: contain; cursor: default; }
+    #videoOverlay {
+      display: none;
+      position: absolute;
+      inset: auto auto 24px 50%;
+      transform: translateX(-50%);
+      max-width: min(560px, 90%);
+      padding: 10px 16px;
+      border-radius: 10px;
+      background: rgba(32, 33, 36, 0.92);
+      border: 1px solid var(--border);
+      font-size: 14px;
+      text-align: center;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
     }
 
     #linkPopup {
@@ -96,7 +162,7 @@
       padding: 8px 10px;
       border-radius: 8px;
       border: 1px solid #555;
-      background: #303134;
+      background: var(--field);
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
       font-size: 13px;
     }
@@ -105,27 +171,61 @@
       text-overflow: ellipsis;
       white-space: nowrap;
       max-width: 240px;
-      color: #8ab4f8;
+      color: var(--link);
     }
-    #linkPopupUrl.empty { color: #9aa0a6; font-style: italic; }
-    #linkPopupCopy {
-      padding: 6px 10px;
-      font-size: 12px;
-      background: #1a73e8;
-      color: white;
-    }
+    #linkPopupUrl.empty { color: var(--muted); font-style: italic; }
+    #linkPopupCopy { padding: 6px 10px; font-size: 12px; background: var(--blue); color: white; }
     #linkPopupCopy.copied { background: #34a853; }
   </style>
 </head>
 <body>
   <div id="joinScreen" class="centerScreen">
-    <h1>Join a shared tab</h1>
-    <p>Enter the code your friend sent you:</p>
-    <input id="hostCodeInput" type="text" placeholder="tabshare-xxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
-    <div class="row">
-      <button id="joinBtn" class="primary">Join</button>
+    <div class="brand">
+      <img src="icons/icon48.png" alt="" />
+      <div>
+        <h1>Join a shared tab</h1>
+        <p>See and control a friend's Chrome tab, peer-to-peer.</p>
+      </div>
     </div>
-    <div id="joinStatus"></div>
+
+    <div class="card">
+      <div class="tabs" role="tablist">
+        <button id="tabCodeBtn" class="active" type="button">Code</button>
+        <button id="tabManualBtn" type="button">Manual (no server)</button>
+      </div>
+
+      <div class="field">
+        <label for="nameInput">Your name (shown to your friend)</label>
+        <input id="nameInput" type="text" maxlength="40" placeholder="e.g. Sam" autocomplete="off" />
+      </div>
+
+      <div id="codePane">
+        <div class="field">
+          <label for="hostCodeInput">Code your friend sent you</label>
+          <input id="hostCodeInput" type="text" placeholder="tabshare-xxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+        </div>
+        <button id="joinBtn" class="primary">Join</button>
+        <div id="joinStatus"></div>
+      </div>
+
+      <div id="manualPane" style="display:none">
+        <p class="hint" style="margin-top:0">
+          Use this if the normal code won't connect. Your friend clicks “Connect manually” on their
+          sharing page and sends you an invite code; you send back a reply code. No server involved.
+        </p>
+        <div class="field">
+          <label for="inviteInput">1. Paste the invite code</label>
+          <textarea id="inviteInput" placeholder="TSI1.…"></textarea>
+        </div>
+        <button id="createReplyBtn" class="primary">Create reply code</button>
+        <textarea id="replyOutput" readonly style="display:none; margin-top:12px"></textarea>
+        <div style="margin-top:8px">
+          <button id="copyReplyBtn" type="button" style="display:none">Copy reply</button>
+        </div>
+        <div id="manualStatus"></div>
+      </div>
+    </div>
+
     <div class="settingsLink">
       Trouble connecting on a strict network?
       <a href="settings.html" target="_blank">Connection settings</a>
@@ -135,10 +235,21 @@
   <div id="sessionScreen">
     <div id="topBar">
       <span id="sessionStatus">Connecting…</span>
+      <span id="viewOnlyBadge" style="display:none">View only</span>
+      <span id="stats"></span>
+      <span class="spacer"></span>
+      <label for="qualitySelect" class="hint">Quality</label>
+      <select id="qualitySelect" title="Lower quality uses less data and stays smoother on slow connections">
+        <option value="auto">Auto</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low (slow internet)</option>
+      </select>
       <button id="leaveBtn">Leave</button>
     </div>
     <div id="videoWrap" tabindex="0">
       <video id="remoteVideo" autoplay playsinline></video>
+      <div id="videoOverlay"></div>
       <div id="linkPopup">
         <span id="linkPopupUrl"></span>
         <button id="linkPopupCopy" type="button">Copy link</button>
@@ -147,6 +258,7 @@
   </div>
 
   <script src="shared/rtc-config.js"></script>
+  <script src="shared/manual-link.js"></script>
   <script src="vendor/peerjs.min.js"></script>
   <script src="viewer.js"></script>
 </body>

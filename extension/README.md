@@ -41,8 +41,8 @@ connection completes automatically.
    normally talk to them.
 3. **Your friend** clicks their extension icon → *Join a friend's share* →
    pastes your code. Their Chrome connects to your ID via the same broker;
-   the WebRTC offer/answer/ICE exchange happens automatically from there —
-   no reply code, no second step.
+   the WebRTC offer/answer/ICE exchange happens automatically from there.
+   You click **Allow** on your sharing page to let them in.
 4. Once connected, video flows **directly peer-to-peer** to your friend, and
    their mouse/keyboard events flow directly back to you over a data
    connection.
@@ -67,6 +67,25 @@ Chrome.
 | `vendor/peerjs.min.js` | shared | Bundled PeerJS client (can't load remote scripts in an extension) |
 | `shared/rtc-config.js` | shared | STUN server list (+ your optional TURN), passed into PeerJS's config |
 | `settings.html` / `settings.js` | options page | Add and test your own TURN server for strict networks |
+| `shared/manual-link.js` | shared | Serverless invite/reply code exchange (fallback when the broker is unreachable) |
+
+## Safety & control
+
+- **You approve every new viewer.** When someone joins with your code, the
+  sharing page asks **Allow / Deny** (and the toolbar icon shows a badge).
+  Nobody gets in just by having the code. Once allowed, a friend whose
+  connection blips is let back in automatically — no repeated prompts.
+- **View-only switch.** Untick "Allow them to control this tab" at any time;
+  enforced on your side, so a modified viewer can't bypass it.
+- **Disconnect friend** button — drops them and forgets their approval.
+
+## Works without the connection service
+
+If PeerJS's broker is down or blocked, use **Connect manually** on the
+sharing page: you send an invite code, your friend pastes it into the
+viewer's **Manual** tab and sends back a reply code. That's all — the
+connection is made with no server at all. (Manual sessions can't
+reconnect by themselves; create a new invite if one drops.)
 
 ## Stability features
 
@@ -83,7 +102,11 @@ Chrome.
 - **Slow-link friendly.** Video is tagged as screen content, so under low
   bandwidth it drops frame rate rather than sharpness; mouse moves are
   throttled and skipped when the link is congested, so clicks and keys
-  aren't delayed behind them. The viewer shows live latency.
+  aren't delayed behind them.
+- **Quality picker** in the viewer (Auto / High / Medium / Low) — Low cuts
+  resolution, frame rate and bitrate for slow or expensive connections.
+- **Live connection info** in the viewer: Direct or Relayed, latency, frame
+  rate, bitrate and packet loss.
 - **Optional TURN server** in Connection settings, with a Test button.
 
 ## Honest limitations

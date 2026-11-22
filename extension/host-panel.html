@@ -4,66 +4,197 @@
   <meta charset="utf-8" />
   <title>TabShare — Sharing</title>
   <style>
+    :root {
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --text: #1f1f1f;
+      --muted: #5f6368;
+      --border: #e3e5e8;
+      --blue: #1a73e8;
+      --green-bg: #e6f4ea;
+      --green: #137333;
+      --red-bg: #fce8e6;
+      --red: #a50e0e;
+      --amber-bg: #fef7e0;
+      --amber: #8a5a00;
+    }
+    * { box-sizing: border-box; }
     body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
       font-family: -apple-system, Segoe UI, Roboto, sans-serif;
-      max-width: 600px;
-      margin: 50px auto;
-      padding: 0 20px;
-      color: #1a1a1a;
     }
-    h1 { font-size: 20px; }
-    h2 { font-size: 15px; margin-top: 28px; }
+    main { max-width: 620px; margin: 40px auto; padding: 0 16px 40px; }
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+    header img { width: 36px; height: 36px; }
+    h1 { font-size: 20px; margin: 0; }
+    h2 { font-size: 15px; margin: 0 0 10px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin-bottom: 14px;
+    }
     #status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
       padding: 12px 14px;
-      border-radius: 8px;
-      background: #f1f3f4;
-      margin: 16px 0;
+      border-radius: 10px;
+      background: #eef1f4;
       font-size: 14px;
+      line-height: 1.4;
     }
-    #status.error { background: #fce8e6; color: #a50e0e; }
-    #status.connected { background: #e6f4ea; color: #137333; }
+    #status::before {
+      content: "";
+      flex: none;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #9aa0a6;
+    }
+    #status.connected { background: var(--green-bg); color: var(--green); }
+    #status.connected::before { background: #1e8e3e; }
+    #status.error { background: var(--red-bg); color: var(--red); }
+    #status.error::before { background: #d93025; }
+    #status.waiting { background: var(--amber-bg); color: var(--amber); }
+    #status.waiting::before { background: #f9ab00; }
     #codeBox {
       width: 100%;
-      box-sizing: border-box;
       padding: 14px 16px;
-      border-radius: 8px;
-      border: 1px solid #ccc;
-      font-family: monospace;
-      font-size: 20px;
+      border-radius: 10px;
+      border: 1px dashed #c4c7cc;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 19px;
       letter-spacing: 0.5px;
       text-align: center;
       background: #f8f9fa;
+      user-select: all;
+      word-break: break-all;
     }
-    .row { display: flex; gap: 8px; margin-top: 8px; }
+    .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
     button {
-      padding: 8px 16px;
-      border-radius: 6px;
+      padding: 9px 16px;
+      border-radius: 8px;
       border: none;
       font-weight: 600;
+      font-size: 13px;
       cursor: pointer;
+      background: #e8eaed;
+      color: var(--text);
     }
-    .primary { background: #1a73e8; color: white; }
-    #stopBtn { background: #ea4335; color: white; margin-top: 24px; }
-    .hint { font-size: 12px; color: #666; }
-    #step1 { display: none; }
+    button:hover { filter: brightness(0.96); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .primary { background: var(--blue); color: white; }
+    .success { background: #1e8e3e; color: white; }
+    .danger { background: #ea4335; color: white; }
+    .hint { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 8px 0 0; }
+    .hidden { display: none !important; }
+
+    #joinRequest {
+      border: 2px solid #f9ab00;
+      background: var(--amber-bg);
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(249, 171, 0, 0.35); }
+      50% { box-shadow: 0 0 0 8px rgba(249, 171, 0, 0); }
+    }
+    #joinRequestText { font-size: 15px; font-weight: 600; }
+
+    .toggle { display: flex; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
+    .toggle input { width: 18px; height: 18px; }
+
+    details summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+    details[open] summary { margin-bottom: 10px; }
+    textarea {
+      width: 100%;
+      min-height: 84px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #c4c7cc;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px;
+      resize: vertical;
+      word-break: break-all;
+    }
+    .step { font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+    #manualStatus { font-size: 13px; margin-top: 8px; min-height: 18px; }
+    #manualStatus.error { color: var(--red); }
+    #manualStatus.ok { color: var(--green); }
+    #stopBtn { width: 100%; padding: 12px; font-size: 14px; }
   </style>
 </head>
 <body>
-  <h1>Sharing</h1>
-  <div id="status">Starting…</div>
-  <div id="nowSharing" class="hint" style="margin-bottom:4px"></div>
-  <div id="switchHint" class="hint" style="display:none; margin-bottom:12px">To share a different tab, switch to it and click the toolbar icon — it'll show a "Continue sharing with this tab" button.</div>
+  <main>
+    <header>
+      <img src="icons/icon48.png" alt="" />
+      <h1>Sharing</h1>
+    </header>
 
-  <div id="step1">
-    <h2>Send this code to your friend</h2>
-    <div id="codeBox" readonly>—</div>
-    <div class="row">
-      <button id="copyCodeBtn" class="primary">Copy code</button>
+    <div class="card">
+      <div id="status">Starting…</div>
+      <div id="nowSharing" class="hint"></div>
+      <div id="switchHint" class="hint hidden">To share a different tab, switch to it and click the toolbar icon — it'll show a "Continue sharing with this tab" button.</div>
     </div>
-    <p class="hint">They paste it into their extension's "Join a friend's share" screen and click Join — it connects automatically, no reply needed.</p>
-  </div>
 
-  <button id="stopBtn">Stop sharing</button>
+    <div id="joinRequest" class="card hidden">
+      <div id="joinRequestText">Someone wants to join</div>
+      <p class="hint" style="color:#5c4400">Only allow people you sent the code to. They'll see this tab and can control it (you can switch to view-only below).</p>
+      <div class="row">
+        <button id="allowBtn" class="success">Allow</button>
+        <button id="denyBtn">Deny</button>
+      </div>
+    </div>
+
+    <div id="friendCard" class="card hidden">
+      <h2 id="friendTitle">Your friend is connected</h2>
+      <label class="toggle">
+        <input id="controlToggle" type="checkbox" checked />
+        Allow them to control this tab (mouse &amp; keyboard)
+      </label>
+      <p class="hint">Turn off for view-only — they can still watch.</p>
+      <div class="row">
+        <button id="kickBtn" class="danger">Disconnect friend</button>
+      </div>
+    </div>
+
+    <div id="step1" class="card hidden">
+      <h2>Send this code to your friend</h2>
+      <div id="codeBox">—</div>
+      <div class="row">
+        <button id="copyCodeBtn" class="primary">Copy code</button>
+      </div>
+      <p class="hint">They paste it into "Join a friend's share" and click Join. You'll be asked to allow them in. If their connection drops, they reconnect automatically with the same code.</p>
+    </div>
+
+    <div id="manualCard" class="card hidden">
+      <details id="manualDetails">
+        <summary>Code not working? Connect manually (no server needed)</summary>
+        <p class="hint" style="margin-top:0">
+          Use this if the code above never connects — e.g. the free connection service is down
+          or blocked where you or your friend are. You'll swap two longer codes through any chat app.
+        </p>
+        <div class="step">1. Create an invite and send it to your friend</div>
+        <div class="row" style="margin-top:0">
+          <button id="createInviteBtn" class="primary">Create invite code</button>
+          <button id="copyInviteBtn" class="hidden">Copy invite</button>
+        </div>
+        <textarea id="inviteBox" class="hidden" readonly style="margin-top:8px"></textarea>
+        <div class="step">2. Paste the reply code they send back</div>
+        <textarea id="replyBox" placeholder="TSR1.…"></textarea>
+        <div class="row">
+          <button id="connectReplyBtn">Connect</button>
+        </div>
+        <div id="manualStatus"></div>
+        <p class="hint">Each invite works once. Manual connections can't reconnect by themselves — if one drops, create a new invite.</p>
+      </details>
+    </div>
+
+    <button id="stopBtn" class="danger">Stop sharing</button>
+  </main>
 
   <script src="host-panel.js"></script>
 </body>

@@ -47,9 +47,18 @@ That's it — no accounts, no keys, nothing else to configure.
 - Copy that code and send it to your friend through whatever chat app you
   already use.
 - **Your friend:** clicks their toolbar icon → **Join a friend's share** →
-  pastes your code → **Join**.
-- That's the whole exchange — the connection completes automatically within
-  a couple of seconds. No reply code, no second step.
+  types their name (optional) → pastes your code → **Join**.
+- **You:** your sharing page shows "*Name* wants to join" — click **Allow**.
+  (The toolbar icon shows a badge while a request is waiting; unanswered
+  requests expire after 90 seconds.)
+- That's it — they're connected. If their connection drops, they reconnect
+  automatically with no new prompt. Untick "Allow them to control this tab"
+  any time for view-only.
+
+**Code won't connect at all?** On the sharing page, open **Connect
+manually**, create an invite and send it; your friend pastes it in the
+viewer's **Manual** tab and sends back the reply code; paste that and click
+**Connect**. No server needed.
 
 Each code is single-use, tied to that one sharing session. If you click
 Stop and Start again, you'll get a fresh code — the old one stops working.

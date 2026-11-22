@@ -212,6 +212,7 @@ async function stopSharing(reason) {
     await detachDebugger(tabId).catch(() => {});
   }
   await closeOffscreenDocument().catch(() => {});
+  chrome.action.setBadgeText({ text: "" }).catch(() => {});
   chrome.runtime.sendMessage({ target: "host", type: "sharing-stopped", reason }).catch(() => {});
 }
 
@@ -233,6 +234,15 @@ chrome.runtime.onMessage.addListener((message) => {
     friendConnected = true;
     minimizeSharedWindow();
   } else if (message.type === "datachannel-closed") friendConnected = false;
+
+  // Someone is waiting to be let in: flag it on the toolbar icon, since the
+  // host may be looking at a different tab than the sharing panel.
+  if (message.type === "join-request") {
+    chrome.action.setBadgeBackgroundColor({ color: "#e37400" }).catch(() => {});
+    chrome.action.setBadgeText({ text: "1" }).catch(() => {});
+  } else if (message.type === "join-resolved") {
+    chrome.action.setBadgeText({ text: "" }).catch(() => {});
+  }
 });
 
 // Shared helper: tuck the shared window away. Called (a) the instant your
