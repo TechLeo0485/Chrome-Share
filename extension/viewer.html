@@ -122,6 +122,8 @@
       padding: 5px 8px;
       font-size: 13px;
     }
+    .toggleSound { display: inline-flex !important; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); cursor: pointer; }
+    .toggleSound input { margin: 0; }
     #leaveBtn { padding: 6px 14px; background: #ea4335; color: white; font-size: 13px; }
     #videoWrap {
       position: relative;
@@ -240,11 +242,15 @@
       <span class="spacer"></span>
       <label for="qualitySelect" class="hint">Quality</label>
       <select id="qualitySelect" title="Lower quality uses less data and stays smoother on slow connections">
-        <option value="auto">Auto</option>
-        <option value="high">High</option>
-        <option value="medium">Medium</option>
-        <option value="low">Low (slow internet)</option>
+        <option value="saver">Data saver (~0.2 Mbps, no sound)</option>
+        <option value="low">Low (~0.5 Mbps)</option>
+        <option value="medium">Balanced (~1 Mbps)</option>
+        <option value="high">High (~2.5 Mbps)</option>
+        <option value="auto">Unlimited</option>
       </select>
+      <label class="toggleSound" title="Turning sound off saves data">
+        <input id="soundToggle" type="checkbox" checked /> Sound
+      </label>
       <button id="leaveBtn">Leave</button>
     </div>
     <div id="videoWrap" tabindex="0">
@@ -257,6 +263,7 @@
     </div>
   </div>
 
+  <script src="shared/codec-prefs.js"></script>
   <script src="shared/rtc-config.js"></script>
   <script src="shared/manual-link.js"></script>
   <script src="vendor/peerjs.min.js"></script>

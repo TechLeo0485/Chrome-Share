@@ -67,6 +67,7 @@ Chrome.
 | `vendor/peerjs.min.js` | shared | Bundled PeerJS client (can't load remote scripts in an extension) |
 | `shared/rtc-config.js` | shared | STUN server list (+ your optional TURN), passed into PeerJS's config |
 | `settings.html` / `settings.js` | options page | Add and test your own TURN server for strict networks |
+| `shared/codec-prefs.js` | shared | Prefers bandwidth-efficient video codecs (VP9/AV1) |
 | `shared/manual-link.js` | shared | Serverless invite/reply code exchange (fallback when the broker is unreachable) |
 
 ## Safety & control
@@ -103,8 +104,27 @@ reconnect by themselves; create a new invite if one drops.)
   bandwidth it drops frame rate rather than sharpness; mouse moves are
   throttled and skipped when the link is congested, so clicks and keys
   aren't delayed behind them.
-- **Quality picker** in the viewer (Auto / High / Medium / Low) — Low cuts
-  resolution, frame rate and bitrate for slow or expensive connections.
+- **Quality picker** in the viewer — Data saver (~0.2 Mbps, no sound),
+  Low, **Balanced (default, ~1 Mbps)**, High, Unlimited.
+
+## Low data use
+
+- **Video pauses when nobody's watching.** If the friend switches away from
+  the viewer tab or minimizes it, the host stops sending video and sound
+  entirely, and resumes instantly when they come back.
+- **Efficient codecs.** Prefers VP9, then AV1, then H.264, over Chrome's
+  default VP8 — typically noticeably less data for the same sharpness on
+  pages and text (`shared/codec-prefs.js`).
+- **Static pages cost almost nothing** — the encoder only sends what changes.
+- **Sound toggle** in the viewer; sound off saves a little more.
+- **Lean input:** mouse moves are capped at ~30/second, skipped when
+  unchanged, and use compact coordinates.
+- **Data used** counter in the viewer's top bar.
+- **Speed limit** (Connection settings): cap video + sound at 100 kbps –
+  5 Mbps. Works for either side — the lower of the two people's limits
+  wins — and applies instantly, even mid-session. Under tight limits, sound
+  gets a small share (or is dropped below ~120 kbps) and the picture lowers
+  its frame rate to stay readable.
 - **Live connection info** in the viewer: Direct or Relayed, latency, frame
   rate, bitrate and packet loss.
 - **Optional TURN server** in Connection settings, with a Test button.

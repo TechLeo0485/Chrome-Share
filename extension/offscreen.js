@@ -49,7 +49,14 @@ let friendWatchdogTimer = null;
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || msg.target !== "offscreen") return;
-  if (msg.type === "begin-host-session") beginHostSession(msg.tabId, msg.streamId, msg.customTurn);
+  if (msg.type === "begin-host-session") {
+    hostSpeedLimitKbps = Number(msg.speedLimitKbps) || 0;
+    beginHostSession(msg.tabId, msg.streamId, msg.customTurn);
+  }
+  if (msg.type === "set-host-speed-limit") {
+    hostSpeedLimitKbps = Number(msg.kbps) || 0;
+    applyQuality();
+  }
   if (msg.type === "switch-tab") switchCapturedTab(msg.tabId, msg.streamId);
   if (msg.type === "check-viewport-now") checkViewportOnce();
   if (msg.type === "end-host-session") endHostSession();
@@ -334,6 +341,10 @@ function acceptFriend(conn, { name, startCall, mediaPc }) {
   closeFriendConnections();
   dataConn = conn;
   friendName = name || "Your friend";
+  // The viewer re-sends its own choices right after join-accepted.
+  videoPaused = false;
+  audioWanted = true;
+  viewerSpeedLimitKbps = 0;
   wireDataConnection(conn);
   lastFriendPingAt = Date.now();
   startFriendWatchdog();
@@ -431,40 +442,105 @@ function stopFriendWatchdog() {
   friendWatchdogTimer = null;
 }
 
-// ---- Video quality (chosen by the viewer) ----
-// Applied to the outgoing video sender's encoding. Lower presets shrink the
-// resolution and frame rate, which is what keeps a weak link usable. Click
-// mapping isn't affected: it uses the host's real page size, not the video's.
+// ---- Data use: quality, sound, pause (all chosen by the viewer) ----
+// Applied to the outgoing senders' encodings. Lower presets cap bitrate,
+// resolution and frame rate. Click mapping isn't affected: it uses the
+// host's real page size, not the video's.
+//
+// "medium" (Balanced) is the default: full resolution so text stays sharp,
+// but a modest frame rate and bitrate cap. Combined with VP9/AV1
+// (shared/codec-prefs.js) and contentHint "detail", a mostly-static page
+// uses very little. "saver" is for metered/expensive connections.
 const QUALITY_PRESETS = {
-  auto: { maxBitrate: null, scale: 1, fps: 30 },
-  high: { maxBitrate: 4000000, scale: 1, fps: 30 },
-  medium: { maxBitrate: 1200000, scale: 1.5, fps: 20 },
-  low: { maxBitrate: 400000, scale: 2, fps: 12 }
+  saver: { maxBitrate: 200000, scale: 1.5, fps: 5, audio: false, audioBitrate: 0 },
+  low: { maxBitrate: 450000, scale: 1.5, fps: 10, audio: true, audioBitrate: 24000 },
+  medium: { maxBitrate: 1000000, scale: 1, fps: 15, audio: true, audioBitrate: 32000 },
+  high: { maxBitrate: 2500000, scale: 1, fps: 30, audio: true, audioBitrate: 48000 },
+  auto: { maxBitrate: null, scale: 1, fps: 30, audio: true, audioBitrate: 64000 }
 };
-let currentQuality = "auto";
+let currentQuality = "medium";
+// Speed limits in kbps (0 = none) from the host's own Connection settings and
+// from the viewer's. The effective cap is the lowest of these and the preset.
+let hostSpeedLimitKbps = 0;
+let viewerSpeedLimitKbps = 0;
+const MIN_LIMIT_KBPS = 50;
+let audioWanted = true; // viewer's Sound toggle
+let videoPaused = false; // viewer's tab is hidden — nobody is watching
 let qualityRetryTimer = null;
+
+// Splits the effective speed limit between sound and video. Under a tight
+// limit, sound gets a small slice (or is dropped below ~120 kbps, where every
+// bit is better spent on the picture), and the video lowers its frame rate
+// and resolution so text stays legible instead of smearing.
+function computeBudget(preset) {
+  const limits = [hostSpeedLimitKbps, viewerSpeedLimitKbps]
+    .filter((k) => k > 0)
+    .map((k) => Math.max(MIN_LIMIT_KBPS, k) * 1000);
+  const presetTotal = preset.maxBitrate ? preset.maxBitrate + (preset.audio ? preset.audioBitrate : 0) : null;
+  const userCap = limits.length ? Math.min(...limits) : null;
+
+  if (!userCap || (presetTotal && userCap >= presetTotal)) {
+    return {
+      videoBps: preset.maxBitrate,
+      audioBps: preset.audioBitrate,
+      audio: preset.audio,
+      scale: preset.scale,
+      fps: preset.fps
+    };
+  }
+
+  const audio = preset.audio && userCap >= 120000;
+  const audioBps = audio ? Math.min(preset.audioBitrate, Math.max(12000, Math.round(userCap * 0.12))) : 0;
+  const videoBps = Math.max(40000, userCap - audioBps);
+  let fps = preset.fps;
+  let scale = preset.scale;
+  if (videoBps < 600000) fps = Math.min(fps, 10);
+  if (videoBps < 300000) {
+    fps = Math.min(fps, 6);
+    scale = Math.max(scale, 1.5);
+  }
+  if (videoBps < 120000) {
+    fps = Math.min(fps, 4);
+    scale = Math.max(scale, 2);
+  }
+  return { videoBps, audioBps, audio, scale, fps };
+}
 
 function applyQuality(attempt) {
   attempt = attempt || 0;
   clearTimeout(qualityRetryTimer);
   qualityRetryTimer = null;
   const pc = mediaConn && mediaConn.peerConnection;
-  const sender = pc && pc.getSenders().find((s) => s.track && s.track.kind === "video");
-  const params = sender && sender.getParameters();
-  if (!params || !params.encodings || !params.encodings.length) {
+  if (!pc) return;
+  const senders = pc.getSenders();
+  const videoSender = senders.find((s) => s.track && s.track.kind === "video");
+  const audioSender = senders.find((s) => s.track && s.track.kind === "audio");
+  const videoParams = videoSender && videoSender.getParameters();
+  if (!videoParams || !videoParams.encodings || !videoParams.encodings.length) {
     // Not negotiated yet — try again shortly.
-    if (attempt < 20 && mediaConn) {
-      qualityRetryTimer = setTimeout(() => applyQuality(attempt + 1), 1000);
-    }
+    if (attempt < 20) qualityRetryTimer = setTimeout(() => applyQuality(attempt + 1), 1000);
     return;
   }
-  const preset = QUALITY_PRESETS[currentQuality] || QUALITY_PRESETS.auto;
-  const enc = params.encodings[0];
-  if (preset.maxBitrate) enc.maxBitrate = preset.maxBitrate;
-  else delete enc.maxBitrate;
-  enc.scaleResolutionDownBy = preset.scale;
-  enc.maxFramerate = preset.fps;
-  sender.setParameters(params).catch(() => {});
+  const preset = QUALITY_PRESETS[currentQuality] || QUALITY_PRESETS.medium;
+  const budget = computeBudget(preset);
+
+  const v = videoParams.encodings[0];
+  if (budget.videoBps) v.maxBitrate = budget.videoBps;
+  else delete v.maxBitrate;
+  v.scaleResolutionDownBy = budget.scale;
+  v.maxFramerate = budget.fps;
+  // Stops the video encoder entirely (zero video bytes) while the viewer
+  // isn't looking; re-enabling sends a fresh keyframe immediately.
+  v.active = !videoPaused;
+  videoSender.setParameters(videoParams).catch(() => {});
+
+  const audioParams = audioSender && audioSender.getParameters();
+  if (audioParams && audioParams.encodings && audioParams.encodings.length) {
+    const a = audioParams.encodings[0];
+    a.active = audioWanted && budget.audio && !videoPaused;
+    if (budget.audioBps) a.maxBitrate = budget.audioBps;
+    audioSender.setParameters(audioParams).catch(() => {});
+  }
 }
 
 // ---- Manual connection (no broker) ----
@@ -573,6 +649,21 @@ function wireDataConnection(conn) {
         currentQuality = msg.level;
         applyQuality();
       }
+      return;
+    }
+    if (msg.type === "set-speed-limit") {
+      viewerSpeedLimitKbps = Math.max(0, Number(msg.kbps) || 0);
+      applyQuality();
+      return;
+    }
+    if (msg.type === "set-audio") {
+      audioWanted = !!msg.enabled;
+      applyQuality();
+      return;
+    }
+    if (msg.type === "set-video-paused") {
+      videoPaused = !!msg.paused;
+      applyQuality();
       return;
     }
     handleInputMessage(msg);

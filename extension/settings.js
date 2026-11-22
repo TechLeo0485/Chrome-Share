@@ -123,4 +123,24 @@ function testTurn(turn) {
   });
 }
 
+// ---- Speed limit ----
+const SPEED_KEY = self.TABSHARE_SPEED_LIMIT_KEY;
+const speedSelect = document.getElementById("speedLimit");
+const speedStatus = document.getElementById("speedStatus");
+
+async function loadSpeed() {
+  const stored = await chrome.storage.local.get(SPEED_KEY);
+  speedSelect.value = String(Number(stored[SPEED_KEY]) || 0);
+  if (!speedSelect.value) speedSelect.value = "0";
+}
+
+speedSelect.addEventListener("change", async () => {
+  const kbps = Number(speedSelect.value) || 0;
+  await chrome.storage.local.set({ [SPEED_KEY]: kbps });
+  speedStatus.textContent = kbps
+    ? "Saved — limited to " + (kbps >= 1000 ? kbps / 1000 + " Mbps" : kbps + " kbps") + ", applied right away."
+    : "Saved — no limit.";
+});
+
 load();
+loadSpeed();

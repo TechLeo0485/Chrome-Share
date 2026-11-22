@@ -57,6 +57,17 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   activeTabHistory.set(windowId, { previous: entry ? entry.current : null, current: tabId });
 });
 
+// The host changed their speed limit in Connection settings mid-session:
+// apply it live (the offscreen document can't watch chrome.storage itself).
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.speedLimitKbps || sharingTabId == null) return;
+  chrome.runtime.sendMessage({
+    target: "offscreen",
+    type: "set-host-speed-limit",
+    kbps: Number(changes.speedLimitKbps.newValue) || 0
+  }).catch(() => {});
+});
+
 async function ensureOffscreenDocument() {
   const existing = await chrome.runtime.getContexts({
     contextTypes: ["OFFSCREEN_DOCUMENT"]
@@ -298,13 +309,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await chrome.storage.session.set({ sharingTabId: initialTabId });
           // The offscreen document has no chrome.storage access, so hand it
           // the user's own TURN server (from Connection settings) here.
-          const stored = await chrome.storage.local.get("customTurnServer").catch(() => ({}));
+          const stored = await chrome.storage.local
+            .get(["customTurnServer", "speedLimitKbps"])
+            .catch(() => ({}));
           chrome.runtime.sendMessage({
             target: "offscreen",
             type: "begin-host-session",
             tabId: initialTabId,
             streamId,
-            customTurn: (stored && stored.customTurnServer) || null
+            customTurn: (stored && stored.customTurnServer) || null,
+            speedLimitKbps: Number(stored && stored.speedLimitKbps) || 0
           }).catch(() => {});
           sendResponse({ ok: true });
           break;

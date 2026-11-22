@@ -27,6 +27,9 @@ self.TABSHARE_DEFAULT_ICE_SERVERS = [
 // { urls: string[], username: string, credential: string }
 self.TABSHARE_TURN_STORAGE_KEY = "customTurnServer";
 
+// chrome.storage.local key: the user's speed limit in kbps (0 = no limit).
+self.TABSHARE_SPEED_LIMIT_KEY = "speedLimitKbps";
+
 // Returns the full iceServers list: built-in STUN plus the user's own TURN
 // server (if they've configured one in settings).
 self.TABSHARE_buildIceServers = function (customTurn) {

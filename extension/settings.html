@@ -15,7 +15,7 @@
     h2 { font-size: 15px; margin-top: 28px; }
     p, li { font-size: 13px; line-height: 1.5; color: #bdc1c6; }
     label { display: block; font-size: 13px; margin: 14px 0 4px; color: #e8eaed; }
-    input, textarea {
+    input, textarea, select {
       width: 100%;
       box-sizing: border-box;
       padding: 10px 12px;
@@ -55,6 +55,26 @@
       There's no free public relay that works without an account, so this extension doesn't
       ship one — but you can add your own.
     </p>
+
+    <h2>Speed limit</h2>
+    <p>
+      Caps how fast the shared tab's video and sound may flow — useful on metered or slow
+      connections, or to leave bandwidth for other things. Applies whether you're sharing
+      or viewing; if both of you set one, the lower limit wins. Takes effect immediately,
+      even during a session.
+    </p>
+    <label for="speedLimit">Maximum speed</label>
+    <select id="speedLimit">
+      <option value="0">No limit (use the viewer's quality setting)</option>
+      <option value="100">100 kbps — very slow, about 45 MB per hour at most</option>
+      <option value="200">200 kbps — about 90 MB per hour at most</option>
+      <option value="300">300 kbps — about 135 MB per hour at most</option>
+      <option value="500">500 kbps — about 225 MB per hour at most</option>
+      <option value="1000">1 Mbps — about 450 MB per hour at most</option>
+      <option value="2000">2 Mbps — about 900 MB per hour at most</option>
+      <option value="5000">5 Mbps</option>
+    </select>
+    <div id="speedStatus" class="muted" style="font-size:13px; margin-top:8px; min-height:18px"></div>
 
     <h2>Your TURN server (optional)</h2>
     <p>

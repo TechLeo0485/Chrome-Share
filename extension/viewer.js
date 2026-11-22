@@ -33,6 +33,7 @@ const sessionStatus = $("sessionStatus");
 const statsEl = $("stats");
 const viewOnlyBadge = $("viewOnlyBadge");
 const qualitySelect = $("qualitySelect");
+const soundToggle = $("soundToggle");
 const leaveBtn = $("leaveBtn");
 const videoWrap = $("videoWrap");
 const remoteVideo = $("remoteVideo");
@@ -97,8 +98,11 @@ function savePref(key, value) {
 }
 
 nameInput.value = loadPref("name", "");
-qualitySelect.value = loadPref("quality", "auto");
-if (!qualitySelect.value) qualitySelect.value = "auto";
+// Default is "Balanced" — sharp text at modest data use. (A value that no
+// longer exists in the list leaves the select empty; fall back to default.)
+qualitySelect.value = loadPref("quality", "medium");
+if (!qualitySelect.value) qualitySelect.value = "medium";
+soundToggle.checked = loadPref("sound", "on") !== "off";
 
 // ---- Status helpers ----
 function setJoinStatus(text, isError) {
@@ -163,6 +167,9 @@ function resetForNewAttempt() {
   reconnectAttempt = 0;
   lastRttMs = null;
   prevVideoStats = null;
+  dataUsedBase = 0;
+  statsPc = null;
+  statsPcBytes = 0;
   clientId = newClientId();
   savePref("name", nameInput.value.trim());
 }
@@ -361,7 +368,7 @@ function onAccepted() {
   showSessionScreen();
   if (!remoteVideo.srcObject) setOverlay("Waiting for video…");
   else setOverlay("");
-  sendInput({ type: "set-quality", level: qualitySelect.value });
+  sendMediaPrefs();
   renderControlState();
   renderStatus();
   videoWrap.focus();
@@ -459,11 +466,76 @@ function renderStatus() {
   else setSessionStatus("Connected — you're in control");
 }
 
+// ---- Data use controls ----
+// Quality preset, sound on/off, and pausing the video entirely while this
+// tab isn't visible (switched away, minimized) — nobody is watching, so the
+// host stops sending video and sound until you come back.
+// Speed limit from Connection settings (kbps, 0 = none). Sent to the host,
+// which caps the stream to it; updates live if changed mid-session.
+let speedLimitKbps = 0;
+
+function formatKbps(kbps) {
+  return kbps >= 1000 ? kbps / 1000 + " Mbps" : kbps + " kbps";
+}
+
+chrome.storage.local.get(self.TABSHARE_SPEED_LIMIT_KEY).then(
+  (stored) => {
+    speedLimitKbps = Number(stored[self.TABSHARE_SPEED_LIMIT_KEY]) || 0;
+  },
+  () => {}
+);
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  const change = changes[self.TABSHARE_SPEED_LIMIT_KEY];
+  if (area !== "local" || !change) return;
+  speedLimitKbps = Number(change.newValue) || 0;
+  sendInput({ type: "set-speed-limit", kbps: speedLimitKbps });
+});
+
+function sendMediaPrefs() {
+  sendInput({ type: "set-speed-limit", kbps: speedLimitKbps });
+  sendInput({ type: "set-quality", level: qualitySelect.value });
+  sendInput({ type: "set-audio", enabled: soundToggle.checked });
+  sendInput({ type: "set-video-paused", paused: document.hidden });
+}
+
+function renderSoundState() {
+  const saver = qualitySelect.value === "saver";
+  soundToggle.disabled = saver; // Data saver never sends sound
+  soundToggle.parentElement.style.opacity = saver ? "0.5" : "";
+  remoteVideo.muted = saver || !soundToggle.checked;
+}
+renderSoundState();
+
 qualitySelect.addEventListener("change", () => {
   savePref("quality", qualitySelect.value);
+  renderSoundState();
   sendInput({ type: "set-quality", level: qualitySelect.value });
   videoWrap.focus();
 });
+
+soundToggle.addEventListener("change", () => {
+  savePref("sound", soundToggle.checked ? "on" : "off");
+  renderSoundState();
+  sendInput({ type: "set-audio", enabled: soundToggle.checked });
+  videoWrap.focus();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!inSession) return;
+  sendInput({ type: "set-video-paused", paused: document.hidden });
+});
+
+// Running total of media data received this session (across reconnects).
+let dataUsedBase = 0; // bytes from earlier connections
+let statsPc = null;
+let statsPcBytes = 0;
+
+function formatBytes(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + " GB";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + " MB";
+  return Math.round(n / 1e3) + " KB";
+}
 
 // Reads WebRTC stats for the video connection: whether it's direct or
 // relayed through a TURN server, frame rate, bitrate and packet loss.
@@ -517,6 +589,19 @@ async function updateStats() {
     }
     prevVideoStats = inbound;
   }
+  let pcBytes = 0;
+  report.forEach((s) => {
+    if (s.type === "transport" && typeof s.bytesReceived === "number") pcBytes += s.bytesReceived;
+  });
+  if (pc !== statsPc) {
+    dataUsedBase += statsPcBytes; // previous connection's total
+    statsPc = pc;
+    statsPcBytes = 0;
+  }
+  statsPcBytes = Math.max(statsPcBytes, pcBytes);
+  const used = dataUsedBase + statsPcBytes;
+  if (used > 0) parts.push(formatBytes(used) + " used");
+  if (speedLimitKbps) parts.push("limit " + formatKbps(speedLimitKbps));
   statsEl.textContent = parts.join(" · ");
   const slow = lastRttMs != null && lastRttMs > SLOW_RTT_MS;
   statsEl.className = slow ? "slow" : "";
@@ -800,14 +885,30 @@ function isCongested() {
 
 // Mouse moves fire up to hundreds of times a second; send at most one per
 // animation frame (only the latest position matters).
+// Mouse moves fire up to hundreds of times a second; send at most ~30 per
+// second, only the latest position, and nothing if it hasn't changed.
+// Coordinates are rounded to 1/10000 of the page — finer than any screen
+// pixel — which keeps each message small.
+const MOVE_INTERVAL_MS = 33;
 let pendingMove = null;
-let moveFrameScheduled = false;
+let moveTimer = null;
+let lastMoveSentAt = 0;
+let lastSentMove = null;
+
+function roundNorm(v) {
+  return Math.round(v * 10000) / 10000;
+}
 
 function flushPendingMove() {
+  clearTimeout(moveTimer);
+  moveTimer = null;
   if (!pendingMove) return;
-  const move = pendingMove;
+  const move = { xNorm: roundNorm(pendingMove.xNorm), yNorm: roundNorm(pendingMove.yNorm) };
   pendingMove = null;
+  if (lastSentMove && lastSentMove.xNorm === move.xNorm && lastSentMove.yNorm === move.yNorm) return;
   if (isCongested() && heldButton === "none") return; // plain hover: safe to drop
+  lastMoveSentAt = Date.now();
+  lastSentMove = move;
   sendInput({ type: "mousemove", xNorm: move.xNorm, yNorm: move.yNorm, button: heldButton, clickCount: 0 });
 }
 
@@ -856,12 +957,9 @@ function buttonName(button) {
 
 videoWrap.addEventListener("mousemove", (e) => {
   pendingMove = normFromEvent(e);
-  if (moveFrameScheduled) return;
-  moveFrameScheduled = true;
-  requestAnimationFrame(() => {
-    moveFrameScheduled = false;
-    flushPendingMove();
-  });
+  if (moveTimer) return;
+  const wait = Math.max(0, MOVE_INTERVAL_MS - (Date.now() - lastMoveSentAt));
+  moveTimer = setTimeout(flushPendingMove, wait);
 });
 
 videoWrap.addEventListener("mousedown", (e) => {
